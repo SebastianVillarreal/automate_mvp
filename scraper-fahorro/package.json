@@ -1,0 +1,22 @@
+{
+  "name": "scraper-fahorro",
+  "version": "1.0.0",
+  "description": "Local Chrome extension DOM scraper with Express capture backend.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "keywords": [
+    "scraping",
+    "rpa",
+    "chrome-extension",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

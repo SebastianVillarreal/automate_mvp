@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Fahorro DOM Extractor",
+  "version": "1.0.0",
+  "description": "Extracts rendered DOM data from the active Chrome tab and sends it to a local Express backend.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:3005/*"
+  ],
+  "action": {
+    "default_title": "Extract DOM"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
