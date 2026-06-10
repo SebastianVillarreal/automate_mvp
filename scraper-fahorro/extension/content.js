@@ -124,7 +124,8 @@
       const result = await captureCurrentPage({
         jobId: pending.job.id,
         captureMode: "auto",
-        extractor: pending.job.extractor
+        extractor: pending.job.extractor,
+        saveDb: Boolean(pending.job.saveDb)
       });
 
       console.log("Automatic capture saved:", result);

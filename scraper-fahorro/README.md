@@ -123,6 +123,46 @@ curl http://localhost:3005/scrape-jobs
 
 El clic en el icono de la extension sigue funcionando como captura manual.
 
+## Guardar tambien en SQL Server
+
+Por defecto siempre se guarda JSON en `captures`. Si quieres guardar tambien en SQL Server, configura estas variables de entorno antes de iniciar el backend:
+
+```powershell
+$env:SQLSERVER_HOST="localhost"
+$env:SQLSERVER_PORT="1433"
+$env:SQLSERVER_DATABASE="ScraperDb"
+$env:SQLSERVER_USER="sa"
+$env:SQLSERVER_PASSWORD="tu_password"
+$env:SQLSERVER_ENCRYPT="false"
+$env:SQLSERVER_TRUST_CERT="true"
+npm start
+```
+
+Valida la conexion:
+
+```powershell
+curl http://localhost:3005/db/health
+```
+
+Para lanzar una captura y guardar en JSON + SQL Server agrega `saveDb=true`:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.fahorro.com%2Ffarmacia.html%3Fpage%3D1&saveDb=true"
+```
+
+Tambien funciona con los otros parametros:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.soriana.com%2Fdespensa%2Fbotanas-y-tostadas%2Fpapas-y-frituras%2F%3Fcgid%3Dbotanas-y-tostadas%26srule%3Dpapas-y-frituras%26start%3D0%26sz%3D200%26pageNumber%3D1%26forceOldView%3Dtrue%26view%3Dgrid%26cref%3D0&waitBeforeCaptureMs=10000&saveDb=true"
+```
+
+El backend crea automaticamente estas tablas si no existen:
+
+- `dbo.ScrapeCaptures`
+- `dbo.ScrapeProducts`
+
+Si falla SQL Server, el JSON se guarda de todos modos y la respuesta incluye `db.saved: false` con el error.
+
 ## Extractores por dominio
 
 La extension usa una arquitectura modular para escalar a otros sitios:
@@ -203,6 +243,7 @@ La extraccion de productos es flexible. Busca candidatos con clases que contenga
 - Si `/open` no abre Chrome, confirma que Chrome esta instalado y disponible en el PATH de Windows. Tambien puedes abrir la URL manualmente en Chrome.
 - Si `/scrape` abre Chrome pero no guarda JSON, recarga la extension en `chrome://extensions` y confirma que la URL abierta sea exactamente la misma que enviaste al endpoint.
 - Si agregas o modificas extractores, recarga la extension desde `chrome://extensions` antes de probar.
+- Si `saveDb=true` no guarda en SQL Server, revisa `curl http://localhost:3005/db/health` y confirma las variables `SQLSERVER_*`.
 
 ## Comandos Windows
 

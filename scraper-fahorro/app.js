@@ -3,9 +3,10 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { exec } = require("child_process");
+const { checkDbHealth, saveCaptureToDb } = require("./db");
 
 const app = express();
-const PORT = 3005;
+const PORT = Number(process.env.PORT || 3005);
 const CAPTURES_DIR = path.join(__dirname, "captures");
 const pendingScrapes = new Map();
 
@@ -90,6 +91,7 @@ function createScrapeJob(targetUrl, options = {}) {
     normalizedUrl: normalizeUrlForMatch(targetUrl),
     extractor: options.extractor || "",
     waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
+    saveDb: Boolean(options.saveDb),
     status: "pending",
     createdAt: new Date().toISOString()
   };
@@ -114,7 +116,16 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/capture", (req, res) => {
+app.get("/db/health", async (_req, res) => {
+  try {
+    await checkDbHealth();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/capture", async (req, res) => {
   const payload = req.body || {};
   const validationError = validateCapture(payload);
 
@@ -134,6 +145,28 @@ app.post("/capture", (req, res) => {
 
   fs.writeFileSync(filePath, JSON.stringify(capture, null, 2), "utf8");
 
+  let db = {
+    requested: Boolean(payload.saveDb),
+    saved: false
+  };
+
+  if (payload.saveDb) {
+    try {
+      const result = await saveCaptureToDb(capture, fileName);
+      db = {
+        requested: true,
+        saved: true,
+        ...result
+      };
+    } catch (error) {
+      db = {
+        requested: true,
+        saved: false,
+        error: error.message
+      };
+    }
+  }
+
   if (payload.jobId && pendingScrapes.has(payload.jobId)) {
     const job = pendingScrapes.get(payload.jobId);
     pendingScrapes.set(payload.jobId, {
@@ -141,7 +174,8 @@ app.post("/capture", (req, res) => {
       status: "completed",
       completedAt: new Date().toISOString(),
       file: fileName,
-      products: payload.products.length
+      products: payload.products.length,
+      db
     });
   }
 
@@ -149,7 +183,8 @@ app.post("/capture", (req, res) => {
     ok: true,
     file: fileName,
     path: filePath,
-    products: payload.products.length
+    products: payload.products.length,
+    db
   });
 });
 
@@ -185,7 +220,8 @@ app.get("/scrape", (req, res) => {
   const waitBeforeCaptureMs = Number(req.query.waitBeforeCaptureMs) || 4000;
   const job = createScrapeJob(targetUrl, {
     extractor: typeof req.query.extractor === "string" ? req.query.extractor : "",
-    waitBeforeCaptureMs
+    waitBeforeCaptureMs,
+    saveDb: req.query.saveDb === "true" || req.query.saveDb === "1"
   });
 
   openChrome(targetUrl, (error) => {
@@ -208,6 +244,7 @@ app.get("/scrape", (req, res) => {
       ok: true,
       jobId: job.id,
       opened: targetUrl,
+      saveDb: job.saveDb,
       message: "Chrome opened. The extension will capture the page automatically when the URL finishes loading."
     });
   });
@@ -240,7 +277,8 @@ app.get("/pending-scrape", (req, res) => {
       id: job.id,
       url: job.url,
       extractor: job.extractor,
-      waitBeforeCaptureMs: job.waitBeforeCaptureMs
+      waitBeforeCaptureMs: job.waitBeforeCaptureMs,
+      saveDb: job.saveDb
     }
   });
 });
