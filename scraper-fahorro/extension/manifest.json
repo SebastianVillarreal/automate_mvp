@@ -29,6 +29,7 @@
         "extractors/fahorro.js",
         "extractors/bodegaaurrera.js",
         "extractors/soriana.js",
+        "extractors/merco.js",
         "content.js"
       ],
       "run_at": "document_idle"

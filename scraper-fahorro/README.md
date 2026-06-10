@@ -16,6 +16,7 @@ scraper-fahorro/
       fahorro.js
       bodegaaurrera.js
       soriana.js
+      merco.js
     manifest.json
     background.js
     content.js
@@ -106,6 +107,12 @@ Para Soriana:
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.soriana.com%2Fdespensa%2Fbotanas-y-tostadas%2Fpapas-y-frituras%2F%3Fcgid%3Dbotanas-y-tostadas%26srule%3Dpapas-y-frituras%26start%3D0%26sz%3D200%26pageNumber%3D1%26forceOldView%3Dtrue%26view%3Dgrid%26cref%3D0"
 ```
 
+Para Merco con scroll automatico:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fadomicilio.merco.mx%2Fc%2Fbebes-d5g3znm5xj&autoScroll=true&waitBeforeCaptureMs=5000&maxScrolls=25"
+```
+
 El backend hace esto:
 
 1. Registra un job pendiente para esa URL.
@@ -174,6 +181,7 @@ extension/extractors/
   fahorro.js
   bodegaaurrera.js
   soriana.js
+  merco.js
 ```
 
 Actualmente hay extractores listos para:
@@ -181,6 +189,7 @@ Actualmente hay extractores listos para:
 - `fahorro`: `fahorro.com`, `www.fahorro.com`
 - `bodegaaurrera`: `bodegaaurrera.com.mx`, `www.bodegaaurrera.com.mx`, `despensa.bodegaaurrera.com.mx`
 - `soriana`: `soriana.com`, `www.soriana.com`
+- `merco`: `merco.mx`, `www.merco.mx`, `adomicilio.merco.mx`
 - `default`: fallback generico para dominios sin extractor dedicado
 
 La seleccion normalmente es automatica por dominio. Si quieres forzar un extractor especifico:
@@ -194,6 +203,19 @@ Tambien puedes ajustar la espera antes de capturar:
 ```powershell
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02&waitBeforeCaptureMs=8000"
 ```
+
+Para sitios que cargan mas productos al hacer scroll, usa:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fadomicilio.merco.mx%2Fc%2Fbebes-d5g3znm5xj&autoScroll=true&scrollStepPx=900&scrollDelayMs=900&maxScrolls=25"
+```
+
+Parametros de scroll:
+
+- `autoScroll=true`: activa scroll antes de capturar.
+- `scrollStepPx`: pixeles por paso de scroll.
+- `scrollDelayMs`: espera entre pasos.
+- `maxScrolls`: maximo de pasos.
 
 Cada captura incluye `domain`, `extractor` y `debug.selectedExtractor` para saber que ruta de extraccion se uso.
 
@@ -244,6 +266,7 @@ La extraccion de productos es flexible. Busca candidatos con clases que contenga
 - Si `/scrape` abre Chrome pero no guarda JSON, recarga la extension en `chrome://extensions` y confirma que la URL abierta sea exactamente la misma que enviaste al endpoint.
 - Si agregas o modificas extractores, recarga la extension desde `chrome://extensions` antes de probar.
 - Si `saveDb=true` no guarda en SQL Server, revisa `curl http://localhost:3005/db/health` y confirma las variables `SQLSERVER_*`.
+- Si una pagina como Merco trae pocos productos, sube `maxScrolls` o `scrollDelayMs` para dar mas tiempo a la carga progresiva.
 
 ## Comandos Windows
 

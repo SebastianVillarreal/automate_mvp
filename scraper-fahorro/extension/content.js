@@ -90,6 +90,37 @@
     return false;
   }
 
+  async function autoScrollPage(options = {}) {
+    const maxScrolls = Number(options.maxScrolls || 20);
+    const scrollStepPx = Number(options.scrollStepPx || 900);
+    const scrollDelayMs = Number(options.scrollDelayMs || 900);
+    let lastScrollHeight = document.documentElement.scrollHeight;
+    let stagnantScrolls = 0;
+
+    for (let index = 0; index < maxScrolls; index += 1) {
+      window.scrollBy({ top: scrollStepPx, left: 0, behavior: "smooth" });
+      await sleep(scrollDelayMs);
+
+      const currentScrollHeight = document.documentElement.scrollHeight;
+      const nearBottom = window.innerHeight + window.scrollY >= currentScrollHeight - 50;
+
+      if (currentScrollHeight === lastScrollHeight && nearBottom) {
+        stagnantScrolls += 1;
+      } else {
+        stagnantScrolls = 0;
+      }
+
+      lastScrollHeight = currentScrollHeight;
+
+      if (stagnantScrolls >= 2) {
+        break;
+      }
+    }
+
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    await sleep(1000);
+  }
+
   async function getPendingScrape() {
     const url = `${PENDING_SCRAPE_API_URL}?url=${encodeURIComponent(window.location.href)}`;
     const response = await fetch(url);
@@ -119,12 +150,22 @@
       console.log("Pending scrape job found:", pending.job);
 
       await sleep(pending.job.waitBeforeCaptureMs || 4000);
+
+      if (pending.job.autoScroll) {
+        await autoScrollPage({
+          maxScrolls: pending.job.maxScrolls,
+          scrollStepPx: pending.job.scrollStepPx,
+          scrollDelayMs: pending.job.scrollDelayMs
+        });
+      }
+
       await waitForProductCandidates(15000, pending.job.extractor);
 
       const result = await captureCurrentPage({
         jobId: pending.job.id,
         captureMode: "auto",
         extractor: pending.job.extractor,
+        autoScroll: Boolean(pending.job.autoScroll),
         saveDb: Boolean(pending.job.saveDb)
       });
 

@@ -91,6 +91,10 @@ function createScrapeJob(targetUrl, options = {}) {
     normalizedUrl: normalizeUrlForMatch(targetUrl),
     extractor: options.extractor || "",
     waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
+    autoScroll: Boolean(options.autoScroll),
+    scrollStepPx: options.scrollStepPx || 900,
+    scrollDelayMs: options.scrollDelayMs || 900,
+    maxScrolls: options.maxScrolls || 20,
     saveDb: Boolean(options.saveDb),
     status: "pending",
     createdAt: new Date().toISOString()
@@ -218,9 +222,16 @@ app.get("/scrape", (req, res) => {
   }
 
   const waitBeforeCaptureMs = Number(req.query.waitBeforeCaptureMs) || 4000;
+  const maxScrolls = Number(req.query.maxScrolls) || 20;
+  const scrollStepPx = Number(req.query.scrollStepPx) || 900;
+  const scrollDelayMs = Number(req.query.scrollDelayMs) || 900;
   const job = createScrapeJob(targetUrl, {
     extractor: typeof req.query.extractor === "string" ? req.query.extractor : "",
     waitBeforeCaptureMs,
+    autoScroll: req.query.autoScroll === "true" || req.query.autoScroll === "1",
+    maxScrolls,
+    scrollStepPx,
+    scrollDelayMs,
     saveDb: req.query.saveDb === "true" || req.query.saveDb === "1"
   });
 
@@ -278,6 +289,10 @@ app.get("/pending-scrape", (req, res) => {
       url: job.url,
       extractor: job.extractor,
       waitBeforeCaptureMs: job.waitBeforeCaptureMs,
+      autoScroll: job.autoScroll,
+      maxScrolls: job.maxScrolls,
+      scrollStepPx: job.scrollStepPx,
+      scrollDelayMs: job.scrollDelayMs,
       saveDb: job.saveDb
     }
   });
