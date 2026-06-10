@@ -82,12 +82,14 @@ function openChrome(targetUrl, callback) {
   exec(command, { windowsHide: true }, callback);
 }
 
-function createScrapeJob(targetUrl) {
+function createScrapeJob(targetUrl, options = {}) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const job = {
     id,
     url: targetUrl,
     normalizedUrl: normalizeUrlForMatch(targetUrl),
+    extractor: options.extractor || "",
+    waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
     status: "pending",
     createdAt: new Date().toISOString()
   };
@@ -180,7 +182,11 @@ app.get("/scrape", (req, res) => {
     return res.status(400).json({ ok: false, error: validation.error });
   }
 
-  const job = createScrapeJob(targetUrl);
+  const waitBeforeCaptureMs = Number(req.query.waitBeforeCaptureMs) || 4000;
+  const job = createScrapeJob(targetUrl, {
+    extractor: typeof req.query.extractor === "string" ? req.query.extractor : "",
+    waitBeforeCaptureMs
+  });
 
   openChrome(targetUrl, (error) => {
     if (error) {
@@ -233,7 +239,8 @@ app.get("/pending-scrape", (req, res) => {
     job: {
       id: job.id,
       url: job.url,
-      waitBeforeCaptureMs: 4000
+      extractor: job.extractor,
+      waitBeforeCaptureMs: job.waitBeforeCaptureMs
     }
   });
 });

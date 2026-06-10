@@ -5,7 +5,14 @@ async function sendExtractMessage(tabId) {
 async function injectContentScript(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content.js"]
+    files: [
+      "extractors/utils.js",
+      "extractors/default.js",
+      "extractors/fahorro.js",
+      "extractors/bodegaaurrera.js",
+      "extractors/soriana.js",
+      "content.js"
+    ]
   });
 }
 

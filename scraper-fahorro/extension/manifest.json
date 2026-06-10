@@ -24,6 +24,11 @@
         "<all_urls>"
       ],
       "js": [
+        "extractors/utils.js",
+        "extractors/default.js",
+        "extractors/fahorro.js",
+        "extractors/bodegaaurrera.js",
+        "extractors/soriana.js",
         "content.js"
       ],
       "run_at": "document_idle"

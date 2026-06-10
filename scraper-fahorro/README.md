@@ -10,6 +10,12 @@ scraper-fahorro/
   app.js
   captures/
   extension/
+    extractors/
+      utils.js
+      default.js
+      fahorro.js
+      bodegaaurrera.js
+      soriana.js
     manifest.json
     background.js
     content.js
@@ -88,6 +94,18 @@ Con el backend corriendo y la extension cargada en Chrome, puedes lanzar una cap
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.fahorro.com%2Ffarmacia.html%3Fpage%3D1"
 ```
 
+Para Bodega Aurrera:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02"
+```
+
+Para Soriana:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.soriana.com%2Fdespensa%2Fbotanas-y-tostadas%2Fpapas-y-frituras%2F%3Fcgid%3Dbotanas-y-tostadas%26srule%3Dpapas-y-frituras%26start%3D0%26sz%3D200%26pageNumber%3D1%26forceOldView%3Dtrue%26view%3Dgrid%26cref%3D0"
+```
+
 El backend hace esto:
 
 1. Registra un job pendiente para esa URL.
@@ -104,6 +122,40 @@ curl http://localhost:3005/scrape-jobs
 ```
 
 El clic en el icono de la extension sigue funcionando como captura manual.
+
+## Extractores por dominio
+
+La extension usa una arquitectura modular para escalar a otros sitios:
+
+```text
+extension/extractors/
+  utils.js
+  default.js
+  fahorro.js
+  bodegaaurrera.js
+  soriana.js
+```
+
+Actualmente hay extractores listos para:
+
+- `fahorro`: `fahorro.com`, `www.fahorro.com`
+- `bodegaaurrera`: `bodegaaurrera.com.mx`, `www.bodegaaurrera.com.mx`, `despensa.bodegaaurrera.com.mx`
+- `soriana`: `soriana.com`, `www.soriana.com`
+- `default`: fallback generico para dominios sin extractor dedicado
+
+La seleccion normalmente es automatica por dominio. Si quieres forzar un extractor especifico:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.fahorro.com%2Ffarmacia.html%3Fpage%3D1&extractor=fahorro"
+```
+
+Tambien puedes ajustar la espera antes de capturar:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02&waitBeforeCaptureMs=8000"
+```
+
+Cada captura incluye `domain`, `extractor` y `debug.selectedExtractor` para saber que ruta de extraccion se uso.
 
 Cada captura se guarda como:
 
@@ -150,6 +202,7 @@ La extraccion de productos es flexible. Busca candidatos con clases que contenga
 - Si no funciona en `chrome://`, `edge://` u otras paginas internas, es normal: Chrome no permite content scripts en paginas internas del navegador.
 - Si `/open` no abre Chrome, confirma que Chrome esta instalado y disponible en el PATH de Windows. Tambien puedes abrir la URL manualmente en Chrome.
 - Si `/scrape` abre Chrome pero no guarda JSON, recarga la extension en `chrome://extensions` y confirma que la URL abierta sea exactamente la misma que enviaste al endpoint.
+- Si agregas o modificas extractores, recarga la extension desde `chrome://extensions` antes de probar.
 
 ## Comandos Windows
 

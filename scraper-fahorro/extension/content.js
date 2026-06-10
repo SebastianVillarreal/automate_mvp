@@ -1,232 +1,60 @@
 (function () {
   const CAPTURE_API_URL = "http://localhost:3005/capture";
   const PENDING_SCRAPE_API_URL = "http://localhost:3005/pending-scrape";
-  const AUTO_CAPTURE_FLAG = "__fahorroAutoCaptureStarted";
-
-  function cleanText(value) {
-    return (value || "").replace(/\s+/g, " ").trim();
-  }
-
-  function truncate(value, maxLength) {
-    const text = value || "";
-    return text.length > maxLength ? text.slice(0, maxLength) : text;
-  }
+  const AUTO_CAPTURE_FLAG = "__domExtractorAutoCaptureStarted";
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function absoluteUrl(value) {
-    if (!value) return "";
-    try {
-      return new URL(value, window.location.href).href;
-    } catch (_error) {
-      return value;
-    }
+  function getHostname() {
+    return window.location.hostname.toLowerCase();
   }
 
-  function firstText(container, selectors) {
-    for (const selector of selectors) {
-      const element = container.querySelector(selector);
-      const text = cleanText(element && element.innerText);
-      if (text) return text;
-
-      const content = cleanText(element && element.getAttribute && element.getAttribute("content"));
-      if (content) return content;
-
-      const title = cleanText(element && element.getAttribute && element.getAttribute("title"));
-      if (title) return title;
+  function getExtractor(preferredExtractorId) {
+    const registry = window.DomExtractor && window.DomExtractor.extractors;
+    if (!registry) {
+      throw new Error("Extractor registry is not loaded.");
     }
 
-    return "";
-  }
-
-  function getPrice(container, selectors) {
-    for (const selector of selectors) {
-      const element = container.querySelector(selector);
-      if (!element) continue;
-
-      const dataPrice = cleanText(element.getAttribute("data-price-amount"));
-      if (dataPrice) return dataPrice;
-
-      const content = cleanText(element.getAttribute("content"));
-      if (content) return content;
-
-      const text = cleanText(element.innerText || element.textContent);
-      if (text) return text;
+    if (preferredExtractorId && registry[preferredExtractorId]) {
+      return registry[preferredExtractorId];
     }
 
-    return "";
-  }
-
-  function getImage(container) {
-    const img = container.querySelector("img");
-    if (!img) return "";
-
-    return absoluteUrl(
-      img.getAttribute("src") ||
-      img.getAttribute("data-src") ||
-      img.getAttribute("data-original") ||
-      img.getAttribute("data-lazy")
-    );
-  }
-
-  function getLink(container) {
-    const link = container.querySelector("a[href]");
-    return link ? absoluteUrl(link.getAttribute("href")) : "";
-  }
-
-  function getSku(container) {
-    const attributes = [
-      "data-product-sku",
-      "data-sku",
-      "data-product-id",
-      "data-id",
-      "data-product"
-    ];
-
-    const addToCartForm = container.querySelector("form[data-role='tocart-form'][data-product-sku]");
-    const addToCartSku = cleanText(addToCartForm && addToCartForm.getAttribute("data-product-sku"));
-    if (addToCartSku) return addToCartSku;
-
-    for (const attr of attributes) {
-      const value = cleanText(container.getAttribute(attr));
-      if (value) return value;
-    }
-
-    const skuElement = container.querySelector("[data-product-sku], [data-sku], [data-product-id], [data-id]");
-    if (skuElement) {
-      for (const attr of attributes) {
-        const value = cleanText(skuElement.getAttribute(attr));
-        if (value) return value;
-      }
-    }
-
-    return "";
-  }
-
-  function looksLikeProductCard(element) {
-    const text = cleanText(element.innerText);
-    if (!text || text.length < 8) return false;
-
-    const hasName = Boolean(element.querySelector(".product-item-name, .product-name, [itemprop='name'], a[title], h2, h3"));
-    const hasPrice = Boolean(element.querySelector(".price, .special-price, [data-price-amount], [itemprop='price']"));
-    const hasImageOrLink = Boolean(element.querySelector("img, a[href]"));
-    const textHasPrice = /(\$|MXN|MN)\s?\d|(?:\d+[.,]\d{2})/.test(text);
-
-    return (hasName && (hasPrice || textHasPrice)) || (hasPrice && hasImageOrLink);
-  }
-
-  function collectProductCandidates() {
-    const selectorGroups = [
-      "[class*='product' i]",
-      "[data-product-id]",
-      "[data-product-sku]",
-      "[data-sku]",
-      "[itemtype*='Product' i]",
-      "li",
-      "article",
-      ".card",
-      "[class*='card' i]"
-    ];
-
-    const candidates = new Set();
-
-    for (const selector of selectorGroups) {
-      document.querySelectorAll(selector).forEach((element) => {
-        if (looksLikeProductCard(element)) {
-          candidates.add(element);
-        }
+    const hostname = getHostname();
+    const extractors = Object.values(registry);
+    const matched = extractors.find((extractor) => {
+      return (extractor.domains || []).some((domain) => {
+        return domain !== "*" && (hostname === domain || hostname.endsWith(`.${domain}`));
       });
-    }
+    });
 
-    return Array.from(candidates);
+    return matched || registry.default;
   }
 
-  function extractProduct(container) {
-    const name = firstText(container, [
-      ".product-item-name",
-      ".product-name",
-      "[itemprop='name']",
-      "a[title]",
-      "h2",
-      "h3"
-    ]);
-
-    const price = getPrice(container, [
-      ".special-price .price",
-      ".price",
-      ".special-price",
-      "[data-price-amount]",
-      "[itemprop='price']"
-    ]);
-
-    const oldPrice = getPrice(container, [
-      ".old-price .price",
-      ".old-price",
-      ".was-price",
-      ".price-old"
-    ]);
-
-    const product = {
-      name,
-      price,
-      oldPrice,
-      image: getImage(container),
-      link: getLink(container),
-      sku: getSku(container),
-      rawText: truncate(cleanText(container.innerText), 1000)
-    };
-
-    if (!product.name && !product.price && !product.link) {
-      return null;
-    }
-
-    return product;
-  }
-
-  function dedupeProducts(products) {
-    const seenLinks = new Set();
-    const seenNamePrice = new Set();
-    const unique = [];
-
-    for (const product of products) {
-      const linkKey = product.link && product.link.toLowerCase();
-      const namePriceKey = `${product.name.toLowerCase()}|${product.price.toLowerCase()}`;
-
-      if (linkKey && seenLinks.has(linkKey)) continue;
-      if (!linkKey && product.name && product.price && seenNamePrice.has(namePriceKey)) continue;
-
-      if (linkKey) seenLinks.add(linkKey);
-      if (product.name && product.price) seenNamePrice.add(namePriceKey);
-
-      unique.push(product);
-    }
-
-    return unique;
-  }
-
-  function extractPageData() {
-    const candidates = collectProductCandidates();
-    const products = dedupeProducts(candidates.map(extractProduct).filter(Boolean));
+  function extractPageData(options = {}) {
+    const selectedExtractor = getExtractor(options.extractor);
+    const extraction = selectedExtractor.extract();
 
     return {
+      domain: getHostname(),
+      extractor: extraction.extractor || selectedExtractor.id,
       url: window.location.href,
       title: document.title,
       timestamp: new Date().toISOString(),
       text: document.body ? document.body.innerText : "",
       html: document.documentElement ? document.documentElement.outerHTML : "",
-      products,
+      products: extraction.products || [],
       debug: {
-        totalProductCandidates: candidates.length,
-        totalProductsExtracted: products.length
+        selectedExtractor: selectedExtractor.id,
+        ...(extraction.debug || {})
       }
     };
   }
 
   async function captureCurrentPage(extraFields = {}) {
     const data = {
-      ...extractPageData(),
+      ...extractPageData({ extractor: extraFields.extractor }),
       ...extraFields
     };
 
@@ -247,11 +75,12 @@
     return result;
   }
 
-  async function waitForProductCandidates(maxWaitMs) {
+  async function waitForProductCandidates(maxWaitMs, preferredExtractorId) {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < maxWaitMs) {
-      if (collectProductCandidates().length > 0) {
+      const extractor = getExtractor(preferredExtractorId);
+      if (extractor.collectCandidates && extractor.collectCandidates().length > 0) {
         return true;
       }
 
@@ -290,11 +119,12 @@
       console.log("Pending scrape job found:", pending.job);
 
       await sleep(pending.job.waitBeforeCaptureMs || 4000);
-      await waitForProductCandidates(15000);
+      await waitForProductCandidates(15000, pending.job.extractor);
 
       const result = await captureCurrentPage({
         jobId: pending.job.id,
-        captureMode: "auto"
+        captureMode: "auto",
+        extractor: pending.job.extractor
       });
 
       console.log("Automatic capture saved:", result);
@@ -308,7 +138,7 @@
       return false;
     }
 
-    captureCurrentPage()
+    captureCurrentPage({ captureMode: "manual", extractor: message.extractor })
       .then((result) => {
         console.log("Capture saved:", result);
         sendResponse({ ok: true, result });
