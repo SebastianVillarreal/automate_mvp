@@ -17,6 +17,7 @@ scraper-fahorro/
       bodegaaurrera.js
       soriana.js
       merco.js
+      farmaciasguadalajara.js
     manifest.json
     background.js
     content.js
@@ -113,6 +114,12 @@ Para Merco con scroll automatico:
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fadomicilio.merco.mx%2Fc%2Fbebes-d5g3znm5xj&autoScroll=true&waitBeforeCaptureMs=5000&maxScrolls=25"
 ```
 
+Para Farmacias Guadalajara con boton `Ver mas productos`:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fwww.farmaciasguadalajara.com%2Fsuper%2Fbebes%2Fformulas-infantiles&autoScroll=true&clickLoadMore=true&waitBeforeCaptureMs=5000&maxLoadMoreClicks=10"
+```
+
 El backend hace esto:
 
 1. Registra un job pendiente para esa URL.
@@ -132,17 +139,43 @@ El clic en el icono de la extension sigue funcionando como captura manual.
 
 ## Guardar tambien en SQL Server
 
-Por defecto siempre se guarda JSON en `captures`. Si quieres guardar tambien en SQL Server, configura estas variables de entorno antes de iniciar el backend:
+Por defecto siempre se guarda JSON en `captures`. Si quieres guardar tambien en SQL Server, edita `scraper-fahorro/.env`.
+
+Hay dos perfiles listos, ambos con usuario/password de SQL Server:
+
+- `local`: SQL Server local con usuario SQL.
+- `vps`: SQL Server remoto con usuario/password SQL.
+
+Selecciona el perfil activo con:
 
 ```powershell
-$env:SQLSERVER_HOST="localhost"
-$env:SQLSERVER_PORT="1433"
-$env:SQLSERVER_DATABASE="ScraperDb"
-$env:SQLSERVER_USER="sa"
-$env:SQLSERVER_PASSWORD="tu_password"
-$env:SQLSERVER_ENCRYPT="false"
-$env:SQLSERVER_TRUST_CERT="true"
-npm start
+SQLSERVER_PROFILE=local
+```
+
+Para VPS usa:
+
+```powershell
+SQLSERVER_PROFILE=vps
+```
+
+El perfil local usa:
+
+```text
+SQLSERVER_LOCAL_AUTH=sql
+SQLSERVER_LOCAL_HOST=localhost
+SQLSERVER_LOCAL_DATABASE=ScraperDb
+SQLSERVER_LOCAL_USER=sa
+SQLSERVER_LOCAL_PASSWORD=your_local_sql_password
+```
+
+El perfil VPS usa:
+
+```text
+SQLSERVER_VPS_AUTH=sql
+SQLSERVER_VPS_HOST=your-vps-host-or-ip
+SQLSERVER_VPS_DATABASE=ScraperDb
+SQLSERVER_VPS_USER=your_sql_user
+SQLSERVER_VPS_PASSWORD=your_sql_password
 ```
 
 Valida la conexion:
@@ -182,6 +215,7 @@ extension/extractors/
   bodegaaurrera.js
   soriana.js
   merco.js
+  farmaciasguadalajara.js
 ```
 
 Actualmente hay extractores listos para:
@@ -190,6 +224,7 @@ Actualmente hay extractores listos para:
 - `bodegaaurrera`: `bodegaaurrera.com.mx`, `www.bodegaaurrera.com.mx`, `despensa.bodegaaurrera.com.mx`
 - `soriana`: `soriana.com`, `www.soriana.com`
 - `merco`: `merco.mx`, `www.merco.mx`, `adomicilio.merco.mx`
+- `farmaciasguadalajara`: `farmaciasguadalajara.com`, `www.farmaciasguadalajara.com`
 - `default`: fallback generico para dominios sin extractor dedicado
 
 La seleccion normalmente es automatica por dominio. Si quieres forzar un extractor especifico:
@@ -216,6 +251,13 @@ Parametros de scroll:
 - `scrollStepPx`: pixeles por paso de scroll.
 - `scrollDelayMs`: espera entre pasos.
 - `maxScrolls`: maximo de pasos.
+
+Parametros para botones de carga:
+
+- `clickLoadMore=true`: busca y presiona botones/enlaces por texto.
+- `loadMoreText`: texto del boton. Por defecto `Ver más productos`.
+- `maxLoadMoreClicks`: maximo de clics.
+- `loadMoreDelayMs`: espera despues de cada clic.
 
 Cada captura incluye `domain`, `extractor` y `debug.selectedExtractor` para saber que ruta de extraccion se uso.
 
@@ -267,6 +309,7 @@ La extraccion de productos es flexible. Busca candidatos con clases que contenga
 - Si agregas o modificas extractores, recarga la extension desde `chrome://extensions` antes de probar.
 - Si `saveDb=true` no guarda en SQL Server, revisa `curl http://localhost:3005/db/health` y confirma las variables `SQLSERVER_*`.
 - Si una pagina como Merco trae pocos productos, sube `maxScrolls` o `scrollDelayMs` para dar mas tiempo a la carga progresiva.
+- Si Farmacias Guadalajara trae pocos productos, sube `maxLoadMoreClicks` o `loadMoreDelayMs`.
 
 ## Comandos Windows
 

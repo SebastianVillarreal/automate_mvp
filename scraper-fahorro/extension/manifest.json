@@ -30,6 +30,7 @@
         "extractors/bodegaaurrera.js",
         "extractors/soriana.js",
         "extractors/merco.js",
+        "extractors/farmaciasguadalajara.js",
         "content.js"
       ],
       "run_at": "document_idle"

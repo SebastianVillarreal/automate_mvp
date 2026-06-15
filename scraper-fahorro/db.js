@@ -2,28 +2,53 @@ const sql = require("mssql");
 
 let poolPromise;
 
+function envForProfile(key) {
+  const profile = (process.env.SQLSERVER_PROFILE || "").toUpperCase();
+  return (profile && process.env[`SQLSERVER_${profile}_${key}`]) || process.env[`SQLSERVER_${key}`];
+}
+
 function boolFromEnv(value, defaultValue) {
   if (value === undefined || value === "") return defaultValue;
   return ["1", "true", "yes", "y"].includes(String(value).toLowerCase());
 }
 
-function getDbConfig() {
-  const required = ["SQLSERVER_HOST", "SQLSERVER_DATABASE", "SQLSERVER_USER", "SQLSERVER_PASSWORD"];
-  const missing = required.filter((key) => !process.env[key]);
-
-  if (missing.length > 0) {
-    throw new Error(`Missing SQL Server environment variable(s): ${missing.join(", ")}`);
-  }
+function parseSqlServerHost(value) {
+  const [host, instanceName] = String(value || "").split("\\");
 
   return {
-    server: process.env.SQLSERVER_HOST,
-    port: Number(process.env.SQLSERVER_PORT || 1433),
-    database: process.env.SQLSERVER_DATABASE,
-    user: process.env.SQLSERVER_USER,
-    password: process.env.SQLSERVER_PASSWORD,
+    server: host,
+    instanceName
+  };
+}
+
+function getDbConfig() {
+  const hostValue = envForProfile("HOST");
+  const database = envForProfile("DATABASE");
+  const portValue = envForProfile("PORT");
+  const parsedHost = parseSqlServerHost(hostValue);
+  const encrypt = boolFromEnv(envForProfile("ENCRYPT"), false);
+  const trustServerCertificate = boolFromEnv(envForProfile("TRUST_CERT"), true);
+  const missing = [];
+
+  if (!hostValue) missing.push("SQLSERVER_HOST");
+  if (!database) missing.push("SQLSERVER_DATABASE");
+  if (!envForProfile("USER")) missing.push("SQLSERVER_USER");
+  if (!envForProfile("PASSWORD")) missing.push("SQLSERVER_PASSWORD");
+
+  if (missing.length > 0) {
+    const profile = process.env.SQLSERVER_PROFILE ? ` for profile ${process.env.SQLSERVER_PROFILE}` : "";
+    throw new Error(`Missing SQL Server environment variable(s)${profile}: ${missing.join(", ")}`);
+  }
+
+  const config = {
+    server: parsedHost.server,
+    database,
+    user: envForProfile("USER"),
+    password: envForProfile("PASSWORD"),
     options: {
-      encrypt: boolFromEnv(process.env.SQLSERVER_ENCRYPT, false),
-      trustServerCertificate: boolFromEnv(process.env.SQLSERVER_TRUST_CERT, true)
+      encrypt,
+      trustServerCertificate,
+      ...(parsedHost.instanceName ? { instanceName: parsedHost.instanceName } : {})
     },
     pool: {
       max: 5,
@@ -31,6 +56,12 @@ function getDbConfig() {
       idleTimeoutMillis: 30000
     }
   };
+
+  if (!parsedHost.instanceName) {
+    config.port = Number(portValue || 1433);
+  }
+
+  return config;
 }
 
 async function getPool() {

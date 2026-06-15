@@ -40,7 +40,35 @@
     return Array.from(candidates);
   }
 
+  function getProductImageUrl(container) {
+    const images = Array.from(container.querySelectorAll("img"));
+
+    for (const image of images) {
+      const urls = [
+        image.getAttribute("data-src"),
+        image.getAttribute("src"),
+        image.getAttribute("data-original"),
+        image.getAttribute("data-lazy")
+      ].filter(Boolean);
+
+      const productUrl = urls.find((url) => /\/images\/product\//i.test(url) && !url.startsWith("data:image"));
+      if (productUrl) {
+        try {
+          return new URL(productUrl, window.location.href).href;
+        } catch (_error) {
+          return productUrl;
+        }
+      }
+    }
+
+    return firstImage(container);
+  }
+
   function getSku(container) {
+    const imageUrl = getProductImageUrl(container);
+    const skuFromImage = imageUrl && imageUrl.match(/\/images\/product\/([^_/?#]+)/i);
+    if (skuFromImage) return skuFromImage[1];
+
     const attributes = [
       "data-pid",
       "data-product-id",
@@ -120,7 +148,7 @@
       name,
       price: prices.price,
       oldPrice: prices.oldPrice,
-      image: firstImage(container),
+      image: getProductImageUrl(container),
       link: firstLink(container),
       sku: getSku(container),
       rawText: truncate(cleanText(container.innerText), 1000)

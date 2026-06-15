@@ -121,6 +121,43 @@
     await sleep(1000);
   }
 
+  function findLoadMoreButton(text) {
+    const expected = (text || "Ver más productos").toLowerCase();
+    const elements = Array.from(document.querySelectorAll("button, a, [role='button']"));
+
+    return elements.find((element) => {
+      const label = (element.innerText || element.textContent || element.getAttribute("aria-label") || "").trim().toLowerCase();
+      const disabled = element.disabled || element.getAttribute("aria-disabled") === "true";
+      const visible = element.offsetParent !== null;
+
+      return visible && !disabled && label.includes(expected);
+    });
+  }
+
+  async function clickLoadMoreButtons(options = {}) {
+    const maxClicks = Number(options.maxLoadMoreClicks || 10);
+    const delayMs = Number(options.loadMoreDelayMs || 1500);
+    const text = options.loadMoreText || "Ver más productos";
+
+    for (let index = 0; index < maxClicks; index += 1) {
+      window.scrollTo({ top: document.documentElement.scrollHeight, left: 0, behavior: "smooth" });
+      await sleep(700);
+
+      const button = findLoadMoreButton(text);
+      if (!button) {
+        break;
+      }
+
+      button.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      await sleep(300);
+      button.click();
+      await sleep(delayMs);
+    }
+
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    await sleep(1000);
+  }
+
   async function getPendingScrape() {
     const url = `${PENDING_SCRAPE_API_URL}?url=${encodeURIComponent(window.location.href)}`;
     const response = await fetch(url);
@@ -159,6 +196,14 @@
         });
       }
 
+      if (pending.job.clickLoadMore) {
+        await clickLoadMoreButtons({
+          loadMoreText: pending.job.loadMoreText,
+          maxLoadMoreClicks: pending.job.maxLoadMoreClicks,
+          loadMoreDelayMs: pending.job.loadMoreDelayMs
+        });
+      }
+
       await waitForProductCandidates(15000, pending.job.extractor);
 
       const result = await captureCurrentPage({
@@ -166,6 +211,7 @@
         captureMode: "auto",
         extractor: pending.job.extractor,
         autoScroll: Boolean(pending.job.autoScroll),
+        clickLoadMore: Boolean(pending.job.clickLoadMore),
         saveDb: Boolean(pending.job.saveDb)
       });
 

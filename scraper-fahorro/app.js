@@ -3,6 +3,9 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { exec } = require("child_process");
+
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
 const { checkDbHealth, saveCaptureToDb } = require("./db");
 
 const app = express();
@@ -92,6 +95,10 @@ function createScrapeJob(targetUrl, options = {}) {
     extractor: options.extractor || "",
     waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
     autoScroll: Boolean(options.autoScroll),
+    clickLoadMore: Boolean(options.clickLoadMore),
+    loadMoreText: options.loadMoreText || "Ver más productos",
+    maxLoadMoreClicks: options.maxLoadMoreClicks || 10,
+    loadMoreDelayMs: options.loadMoreDelayMs || 1500,
     scrollStepPx: options.scrollStepPx || 900,
     scrollDelayMs: options.scrollDelayMs || 900,
     maxScrolls: options.maxScrolls || 20,
@@ -225,10 +232,16 @@ app.get("/scrape", (req, res) => {
   const maxScrolls = Number(req.query.maxScrolls) || 20;
   const scrollStepPx = Number(req.query.scrollStepPx) || 900;
   const scrollDelayMs = Number(req.query.scrollDelayMs) || 900;
+  const maxLoadMoreClicks = Number(req.query.maxLoadMoreClicks) || 10;
+  const loadMoreDelayMs = Number(req.query.loadMoreDelayMs) || 1500;
   const job = createScrapeJob(targetUrl, {
     extractor: typeof req.query.extractor === "string" ? req.query.extractor : "",
     waitBeforeCaptureMs,
     autoScroll: req.query.autoScroll === "true" || req.query.autoScroll === "1",
+    clickLoadMore: req.query.clickLoadMore === "true" || req.query.clickLoadMore === "1",
+    loadMoreText: typeof req.query.loadMoreText === "string" ? req.query.loadMoreText : "Ver más productos",
+    maxLoadMoreClicks,
+    loadMoreDelayMs,
     maxScrolls,
     scrollStepPx,
     scrollDelayMs,
@@ -290,6 +303,10 @@ app.get("/pending-scrape", (req, res) => {
       extractor: job.extractor,
       waitBeforeCaptureMs: job.waitBeforeCaptureMs,
       autoScroll: job.autoScroll,
+      clickLoadMore: job.clickLoadMore,
+      loadMoreText: job.loadMoreText,
+      maxLoadMoreClicks: job.maxLoadMoreClicks,
+      loadMoreDelayMs: job.loadMoreDelayMs,
       maxScrolls: job.maxScrolls,
       scrollStepPx: job.scrollStepPx,
       scrollDelayMs: job.scrollDelayMs,

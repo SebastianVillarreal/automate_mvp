@@ -12,6 +12,7 @@ async function injectContentScript(tabId) {
       "extractors/bodegaaurrera.js",
       "extractors/soriana.js",
       "extractors/merco.js",
+      "extractors/farmaciasguadalajara.js",
       "content.js"
     ]
   });
