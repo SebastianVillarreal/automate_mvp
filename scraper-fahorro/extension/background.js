@@ -18,6 +18,24 @@ async function injectContentScript(tabId) {
   });
 }
 
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || message.action !== "closeTab") {
+    return false;
+  }
+
+  const tabId = sender && sender.tab && sender.tab.id;
+  if (!tabId) {
+    sendResponse({ ok: false, error: "No sender tab found." });
+    return false;
+  }
+
+  chrome.tabs.remove(tabId)
+    .then(() => sendResponse({ ok: true }))
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
+
+  return true;
+});
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) {
     console.error("No active tab found.");

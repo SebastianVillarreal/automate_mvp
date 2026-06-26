@@ -2,6 +2,7 @@
   const CAPTURE_API_URL = "http://localhost:3005/capture";
   const PENDING_SCRAPE_API_URL = "http://localhost:3005/pending-scrape";
   const AUTO_CAPTURE_FLAG = "__domExtractorAutoCaptureStarted";
+  const PAGINATION_JOB_KEY = "__domExtractorPaginationJob";
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,9 +54,14 @@
   }
 
   async function captureCurrentPage(extraFields = {}) {
+    const cleanExtraFields = { ...extraFields };
+    if (!cleanExtraFields.extractor) {
+      delete cleanExtraFields.extractor;
+    }
+
     const data = {
-      ...extractPageData({ extractor: extraFields.extractor }),
-      ...extraFields
+      ...extractPageData({ extractor: cleanExtraFields.extractor }),
+      ...cleanExtraFields
     };
 
     const response = await fetch(CAPTURE_API_URL, {
@@ -122,11 +128,18 @@
   }
 
   function findLoadMoreButton(text) {
-    const expected = (text || "Ver más productos").toLowerCase();
+    const normalizeLabel = (value) => {
+      return (value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+    };
+    const expected = normalizeLabel(text || "Ver mas productos");
     const elements = Array.from(document.querySelectorAll("button, a, [role='button']"));
 
     return elements.find((element) => {
-      const label = (element.innerText || element.textContent || element.getAttribute("aria-label") || "").trim().toLowerCase();
+      const label = normalizeLabel(element.innerText || element.textContent || element.getAttribute("aria-label"));
       const disabled = element.disabled || element.getAttribute("aria-disabled") === "true";
       const visible = element.offsetParent !== null;
 
@@ -158,6 +171,92 @@
     await sleep(1000);
   }
 
+  function getCurrentPageNumber() {
+    const value = new URL(window.location.href).searchParams.get("page");
+    const page = Number(value || 1);
+    return Number.isFinite(page) && page > 0 ? page : 1;
+  }
+
+  function buildPageUrl(pageNumber) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", String(pageNumber));
+    return url.href;
+  }
+
+  function getPaginationJobFromSession() {
+    const raw = sessionStorage.getItem(PAGINATION_JOB_KEY);
+    if (!raw) return null;
+
+    try {
+      const job = JSON.parse(raw);
+      if (!job || !job.autoPaginate) return null;
+      return job;
+    } catch (_error) {
+      sessionStorage.removeItem(PAGINATION_JOB_KEY);
+      return null;
+    }
+  }
+
+  function savePaginationJobToSession(job, pageNumber) {
+    sessionStorage.setItem(PAGINATION_JOB_KEY, JSON.stringify({
+      ...job,
+      paginationPageNumber: pageNumber
+    }));
+  }
+
+  function clearPaginationJobFromSession() {
+    sessionStorage.removeItem(PAGINATION_JOB_KEY);
+  }
+
+  async function closeCurrentTab() {
+    try {
+      await sleep(500);
+      chrome.runtime.sendMessage({ action: "closeTab" });
+    } catch (error) {
+      console.warn("Could not request tab close:", error.message);
+    }
+  }
+
+  function hasPaginationEvidence() {
+    const hasNumberedPageControl = Boolean(Array.from(document.querySelectorAll("a[href], button, [role='button']")).find((element) => {
+      const label = (element.innerText || element.textContent || "").trim();
+      const href = element.getAttribute && element.getAttribute("href");
+      const pageFromHref = href && href.match(/[?&]page=(\d+)/i);
+
+      return (Number(label) > 1) || (pageFromHref && Number(pageFromHref[1]) > 1);
+    }));
+
+    return hasNumberedPageControl || getMaxVisiblePageNumber() > 1;
+  }
+
+  function getMaxVisiblePageNumber() {
+    const numbers = Array.from(document.querySelectorAll("a[href], button, [role='button']"))
+      .map((element) => Number((element.innerText || element.textContent || "").trim()))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    return numbers.length > 0 ? Math.max(...numbers) : 0;
+  }
+
+  async function getNextPaginatedUrl(job) {
+    if (!job || !job.autoPaginate) return "";
+
+    window.scrollTo({ top: document.documentElement.scrollHeight, left: 0, behavior: "smooth" });
+    await sleep(900);
+
+    const currentPage = getCurrentPageNumber();
+    const maxPages = Number(job.maxPages || 10);
+    const maxVisiblePage = getMaxVisiblePageNumber();
+    const hasNext = maxVisiblePage > 1 && currentPage < maxVisiblePage;
+
+    if (!hasPaginationEvidence() || currentPage >= maxPages || !hasNext) {
+      clearPaginationJobFromSession();
+      window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+      return "";
+    }
+
+    return buildPageUrl(currentPage + 1);
+  }
+
   async function getPendingScrape() {
     const url = `${PENDING_SCRAPE_API_URL}?url=${encodeURIComponent(window.location.href)}`;
     const response = await fetch(url);
@@ -167,6 +266,15 @@
     }
 
     return response.json();
+  }
+
+  async function getCurrentJob() {
+    const pending = await getPendingScrape();
+    if (pending && pending.pending && pending.job) {
+      return pending.job;
+    }
+
+    return getPaginationJobFromSession();
   }
 
   async function autoCapturePendingScrape() {
@@ -179,43 +287,57 @@
     try {
       await sleep(1500);
 
-      const pending = await getPendingScrape();
-      if (!pending || !pending.pending || !pending.job) {
+      const job = await getCurrentJob();
+      if (!job) {
         return;
       }
 
-      console.log("Pending scrape job found:", pending.job);
+      console.log("Scrape job found:", job);
 
-      await sleep(pending.job.waitBeforeCaptureMs || 4000);
+      await sleep(job.waitBeforeCaptureMs || 4000);
 
-      if (pending.job.autoScroll) {
+      if (job.autoScroll) {
         await autoScrollPage({
-          maxScrolls: pending.job.maxScrolls,
-          scrollStepPx: pending.job.scrollStepPx,
-          scrollDelayMs: pending.job.scrollDelayMs
+          maxScrolls: job.maxScrolls,
+          scrollStepPx: job.scrollStepPx,
+          scrollDelayMs: job.scrollDelayMs
         });
       }
 
-      if (pending.job.clickLoadMore) {
+      if (job.clickLoadMore) {
         await clickLoadMoreButtons({
-          loadMoreText: pending.job.loadMoreText,
-          maxLoadMoreClicks: pending.job.maxLoadMoreClicks,
-          loadMoreDelayMs: pending.job.loadMoreDelayMs
+          loadMoreText: job.loadMoreText,
+          maxLoadMoreClicks: job.maxLoadMoreClicks,
+          loadMoreDelayMs: job.loadMoreDelayMs
         });
       }
 
-      await waitForProductCandidates(15000, pending.job.extractor);
+      await waitForProductCandidates(15000, job.extractor);
 
       const result = await captureCurrentPage({
-        jobId: pending.job.id,
+        jobId: job.id,
         captureMode: "auto",
-        extractor: pending.job.extractor,
-        autoScroll: Boolean(pending.job.autoScroll),
-        clickLoadMore: Boolean(pending.job.clickLoadMore),
-        saveDb: Boolean(pending.job.saveDb)
+        extractor: job.extractor,
+        autoScroll: Boolean(job.autoScroll),
+        autoPaginate: Boolean(job.autoPaginate),
+        pageNumber: getCurrentPageNumber(),
+        clickLoadMore: Boolean(job.clickLoadMore),
+        saveDb: Boolean(job.saveDb)
       });
 
       console.log("Automatic capture saved:", result);
+
+      const nextUrl = await getNextPaginatedUrl(job);
+      if (nextUrl) {
+        savePaginationJobToSession(job, getCurrentPageNumber() + 1);
+        await sleep(job.paginationDelayMs || 2500);
+        window.location.href = nextUrl;
+        return;
+      }
+
+      if (job.closeTab) {
+        await closeCurrentTab();
+      }
     } catch (error) {
       console.warn("Automatic capture did not run:", error.message);
     }

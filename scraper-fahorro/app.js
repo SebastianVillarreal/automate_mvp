@@ -6,7 +6,7 @@ const { exec } = require("child_process");
 
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
-const { checkDbHealth, saveCaptureToDb } = require("./db");
+const { buildDescriptionEquivalenceSql, checkDbHealth, getActiveScrapeUrls, getComparativa, matchDescriptionEquivalences, saveCaptureToDb } = require("./db");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -86,6 +86,90 @@ function openChrome(targetUrl, callback) {
   exec(command, { windowsHide: true }, callback);
 }
 
+function openChromeAsync(targetUrl) {
+  return new Promise((resolve, reject) => {
+    openChrome(targetUrl, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function queryBool(value, defaultValue = false) {
+  if (value === undefined) return defaultValue;
+  return value === "true" || value === "1";
+}
+
+function queryNumber(value, defaultValue) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
+function inferScrapeOptionsFromUrl(targetUrl) {
+  const hostname = new URL(targetUrl).hostname.toLowerCase();
+
+  if (hostname.includes("adomicilio.merco.mx")) {
+    return {
+      autoScroll: true,
+      waitBeforeCaptureMs: 5000,
+      maxScrolls: 25
+    };
+  }
+
+  if (hostname.includes("farmaciasguadalajara.com")) {
+    return {
+      autoScroll: true,
+      clickLoadMore: true,
+      waitBeforeCaptureMs: 5000,
+      maxLoadMoreClicks: 10,
+      loadMoreDelayMs: 1500
+    };
+  }
+
+  if (hostname.includes("bodegaaurrera.com.mx")) {
+    return {
+      autoPaginate: true,
+      maxPages: 10,
+      paginationDelayMs: 2500
+    };
+  }
+
+  return {};
+}
+
+function scrapeOptionsFromQuery(req, targetUrl, defaults = {}) {
+  const base = {
+    ...inferScrapeOptionsFromUrl(targetUrl),
+    ...defaults
+  };
+
+  return {
+    extractor: typeof req.query.extractor === "string" ? req.query.extractor : (base.extractor || ""),
+    waitBeforeCaptureMs: queryNumber(req.query.waitBeforeCaptureMs, base.waitBeforeCaptureMs || 4000),
+    autoScroll: queryBool(req.query.autoScroll, Boolean(base.autoScroll)),
+    autoPaginate: queryBool(req.query.autoPaginate, Boolean(base.autoPaginate)),
+    clickLoadMore: queryBool(req.query.clickLoadMore, Boolean(base.clickLoadMore)),
+    loadMoreText: typeof req.query.loadMoreText === "string" ? req.query.loadMoreText : (base.loadMoreText || "Ver mas productos"),
+    maxLoadMoreClicks: queryNumber(req.query.maxLoadMoreClicks, base.maxLoadMoreClicks || 10),
+    loadMoreDelayMs: queryNumber(req.query.loadMoreDelayMs, base.loadMoreDelayMs || 1500),
+    maxPages: queryNumber(req.query.maxPages, base.maxPages || 10),
+    paginationDelayMs: queryNumber(req.query.paginationDelayMs, base.paginationDelayMs || 2500),
+    maxScrolls: queryNumber(req.query.maxScrolls, base.maxScrolls || 20),
+    scrollStepPx: queryNumber(req.query.scrollStepPx, base.scrollStepPx || 900),
+    scrollDelayMs: queryNumber(req.query.scrollDelayMs, base.scrollDelayMs || 900),
+    closeTab: queryBool(req.query.closeTab, base.closeTab !== undefined ? Boolean(base.closeTab) : true),
+    saveDb: queryBool(req.query.saveDb, Boolean(base.saveDb))
+  };
+}
+
 function createScrapeJob(targetUrl, options = {}) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const job = {
@@ -95,13 +179,17 @@ function createScrapeJob(targetUrl, options = {}) {
     extractor: options.extractor || "",
     waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
     autoScroll: Boolean(options.autoScroll),
+    autoPaginate: Boolean(options.autoPaginate),
     clickLoadMore: Boolean(options.clickLoadMore),
     loadMoreText: options.loadMoreText || "Ver más productos",
     maxLoadMoreClicks: options.maxLoadMoreClicks || 10,
     loadMoreDelayMs: options.loadMoreDelayMs || 1500,
+    maxPages: options.maxPages || 10,
+    paginationDelayMs: options.paginationDelayMs || 2500,
     scrollStepPx: options.scrollStepPx || 900,
     scrollDelayMs: options.scrollDelayMs || 900,
     maxScrolls: options.maxScrolls || 20,
+    closeTab: options.closeTab !== undefined ? Boolean(options.closeTab) : true,
     saveDb: Boolean(options.saveDb),
     status: "pending",
     createdAt: new Date().toISOString()
@@ -136,6 +224,64 @@ app.get("/db/health", async (_req, res) => {
   }
 });
 
+app.get("/comparativa", async (_req, res) => {
+  try {
+    const data = await getComparativa();
+    res.json({
+      ok: true,
+      count: data.length,
+      data
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/match-description-equivalences/sql", (req, res) => {
+  const sqlText = buildDescriptionEquivalenceSql({
+    minScore: queryNumber(req.query.minScore, 70),
+    limit: queryNumber(req.query.limit, 500),
+    save: queryBool(req.query.save, false)
+  });
+
+  res.type("text/plain").send(sqlText);
+});
+
+app.get("/match-description-equivalences", async (req, res) => {
+  try {
+    if (queryBool(req.query.printSql, false)) {
+      const sqlText = buildDescriptionEquivalenceSql({
+        minScore: queryNumber(req.query.minScore, 70),
+        limit: queryNumber(req.query.limit, 500),
+        save: queryBool(req.query.save, false)
+      });
+
+      return res.json({
+        ok: true,
+        execute: false,
+        sql: sqlText
+      });
+    }
+
+    const result = await matchDescriptionEquivalences({
+      minScore: queryNumber(req.query.minScore, 70),
+      limit: queryNumber(req.query.limit, 500),
+      requestTimeoutMs: queryNumber(req.query.requestTimeoutMs, 120000),
+      save: queryBool(req.query.save, false)
+    });
+
+    res.json({
+      ok: true,
+      minScore: queryNumber(req.query.minScore, 70),
+      limit: queryNumber(req.query.limit, 500),
+      requestTimeoutMs: queryNumber(req.query.requestTimeoutMs, 120000),
+      ...result
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.post("/capture", async (req, res) => {
   const payload = req.body || {};
   const validationError = validateCapture(payload);
@@ -151,7 +297,8 @@ app.post("/capture", async (req, res) => {
 
   const capture = {
     receivedAt: new Date().toISOString(),
-    ...payload
+    ...payload,
+    extractor: payload.extractor || (payload.debug && payload.debug.selectedExtractor) || ""
   };
 
   fs.writeFileSync(filePath, JSON.stringify(capture, null, 2), "utf8");
@@ -228,25 +375,7 @@ app.get("/scrape", (req, res) => {
     return res.status(400).json({ ok: false, error: validation.error });
   }
 
-  const waitBeforeCaptureMs = Number(req.query.waitBeforeCaptureMs) || 4000;
-  const maxScrolls = Number(req.query.maxScrolls) || 20;
-  const scrollStepPx = Number(req.query.scrollStepPx) || 900;
-  const scrollDelayMs = Number(req.query.scrollDelayMs) || 900;
-  const maxLoadMoreClicks = Number(req.query.maxLoadMoreClicks) || 10;
-  const loadMoreDelayMs = Number(req.query.loadMoreDelayMs) || 1500;
-  const job = createScrapeJob(targetUrl, {
-    extractor: typeof req.query.extractor === "string" ? req.query.extractor : "",
-    waitBeforeCaptureMs,
-    autoScroll: req.query.autoScroll === "true" || req.query.autoScroll === "1",
-    clickLoadMore: req.query.clickLoadMore === "true" || req.query.clickLoadMore === "1",
-    loadMoreText: typeof req.query.loadMoreText === "string" ? req.query.loadMoreText : "Ver más productos",
-    maxLoadMoreClicks,
-    loadMoreDelayMs,
-    maxScrolls,
-    scrollStepPx,
-    scrollDelayMs,
-    saveDb: req.query.saveDb === "true" || req.query.saveDb === "1"
-  });
+  const job = createScrapeJob(targetUrl, scrapeOptionsFromQuery(req, targetUrl));
 
   openChrome(targetUrl, (error) => {
     if (error) {
@@ -272,6 +401,72 @@ app.get("/scrape", (req, res) => {
       message: "Chrome opened. The extension will capture the page automatically when the URL finishes loading."
     });
   });
+});
+
+app.get("/scrape-active-urls", async (req, res) => {
+  try {
+    const urls = await getActiveScrapeUrls();
+    const limit = Math.min(queryNumber(req.query.limit, urls.length || 1), urls.length);
+    const openDelayMs = queryNumber(req.query.openDelayMs, 1500);
+    const selectedUrls = urls.slice(0, limit);
+    const jobs = [];
+
+    for (const targetUrl of selectedUrls) {
+      const validation = validateTargetUrl(targetUrl);
+
+      if (validation.error) {
+        jobs.push({
+          ok: false,
+          url: targetUrl,
+          error: validation.error
+        });
+        continue;
+      }
+
+      const job = createScrapeJob(targetUrl, scrapeOptionsFromQuery(req, targetUrl, { saveDb: true }));
+
+      try {
+        await openChromeAsync(targetUrl);
+        jobs.push({
+          ok: true,
+          jobId: job.id,
+          url: targetUrl,
+          saveDb: job.saveDb,
+          autoScroll: job.autoScroll,
+          autoPaginate: job.autoPaginate,
+          clickLoadMore: job.clickLoadMore
+        });
+      } catch (error) {
+        pendingScrapes.set(job.id, {
+          ...job,
+          status: "open_failed",
+          error: error.message
+        });
+
+        jobs.push({
+          ok: false,
+          jobId: job.id,
+          url: targetUrl,
+          error: error.message
+        });
+      }
+
+      if (openDelayMs > 0) {
+        await sleep(openDelayMs);
+      }
+    }
+
+    res.json({
+      ok: true,
+      source: "Urls_Scrapp",
+      totalActiveUrls: urls.length,
+      launched: jobs.filter((job) => job.ok).length,
+      failed: jobs.filter((job) => !job.ok).length,
+      jobs
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 app.get("/pending-scrape", (req, res) => {
@@ -303,13 +498,17 @@ app.get("/pending-scrape", (req, res) => {
       extractor: job.extractor,
       waitBeforeCaptureMs: job.waitBeforeCaptureMs,
       autoScroll: job.autoScroll,
+      autoPaginate: job.autoPaginate,
       clickLoadMore: job.clickLoadMore,
       loadMoreText: job.loadMoreText,
       maxLoadMoreClicks: job.maxLoadMoreClicks,
       loadMoreDelayMs: job.loadMoreDelayMs,
+      maxPages: job.maxPages,
+      paginationDelayMs: job.paginationDelayMs,
       maxScrolls: job.maxScrolls,
       scrollStepPx: job.scrollStepPx,
       scrollDelayMs: job.scrollDelayMs,
+      closeTab: job.closeTab,
       saveDb: job.saveDb
     }
   });

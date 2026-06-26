@@ -102,6 +102,12 @@ Para Bodega Aurrera:
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02"
 ```
 
+Bodega Aurrera activa paginacion automatica por default. Si una categoria tiene mas paginas, la extension captura la pagina actual y navega a `&page=2`, `&page=3`, etc. Puedes controlar el maximo:
+
+```powershell
+curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02&autoPaginate=true&maxPages=5"
+```
+
 Para Soriana:
 
 ```powershell
@@ -136,6 +142,44 @@ curl http://localhost:3005/scrape-jobs
 ```
 
 El clic en el icono de la extension sigue funcionando como captura manual.
+
+## Ejecutar URLs activas desde SQL Server
+
+El endpoint lee URLs activas desde SQL Server:
+
+```sql
+SELECT strUrl
+FROM Urls_Scrapp
+WHERE estatus = 1;
+```
+
+Ejecuta scraping para cada URL activa:
+
+```powershell
+curl http://localhost:3005/scrape-active-urls
+```
+
+Por defecto este endpoint usa `saveDb=true`, crea un job por URL y abre cada URL en Chrome con una pausa de 1.5 segundos entre tabs.
+Al terminar cada scrape automatico, la extension cierra la pestaña. Puedes evitarlo con `closeTab=false`.
+
+Parametros utiles:
+
+```powershell
+curl "http://localhost:3005/scrape-active-urls?limit=5&openDelayMs=2500"
+```
+
+- `limit`: maximo de URLs a lanzar.
+- `openDelayMs`: espera entre abrir una URL y la siguiente.
+- `saveDb=false`: desactiva guardado en SQL Server.
+- `closeTab=false`: deja abiertas las pestañas al terminar.
+- Tambien acepta los mismos parametros de `/scrape`, como `waitBeforeCaptureMs`, `autoScroll`, `autoPaginate`, `clickLoadMore`, `maxScrolls`, `maxPages` y `maxLoadMoreClicks`.
+
+El backend infiere algunos defaults por dominio:
+
+- `adomicilio.merco.mx`: activa `autoScroll`.
+- `farmaciasguadalajara.com`: activa `autoScroll` y `clickLoadMore`.
+
+Si necesitas configuracion por URL, lo mas limpio es extender `Urls_Scrapp` o crear un SP que devuelva columnas como `strUrl`, `extractor`, `autoScroll`, `clickLoadMore`, `waitBeforeCaptureMs`, `maxScrolls`, `maxLoadMoreClicks` y `saveDb`.
 
 ## Guardar tambien en SQL Server
 
@@ -183,6 +227,86 @@ Valida la conexion:
 ```powershell
 curl http://localhost:3005/db/health
 ```
+
+Consulta la comparativa desde el SP `GetComparativa`:
+
+```powershell
+curl http://localhost:3005/comparativa
+```
+
+Respuesta:
+
+```json
+{
+  "ok": true,
+  "count": 10,
+  "data": []
+}
+```
+
+## Matching por descripcion
+
+Este endpoint cruza `com_articulos.descripcion` contra `ScrapeProducts.name` y propone equivalencias entre `com_articulos.codigo` y `ScrapeProducts.sku`.
+
+Primero crea esta tabla manualmente en SQL Server:
+
+```sql
+CREATE TABLE dbo.ScrapeProductEquivalences (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    artc_articulo NVARCHAR(255) NOT NULL,
+    artc_descripcion NVARCHAR(1000) NOT NULL,
+    scrapeProductId INT NOT NULL,
+    scrapeSku NVARCHAR(255) NOT NULL,
+    scrapeName NVARCHAR(1000) NULL,
+    scrapeLink NVARCHAR(2000) NULL,
+    scrapeDomain NVARCHAR(255) NULL,
+    matchScore DECIMAL(5,2) NOT NULL,
+    matchMethod NVARCHAR(50) NOT NULL,
+    status NVARCHAR(30) NOT NULL CONSTRAINT DF_ScrapeProductEquivalences_status DEFAULT 'pending',
+    createdAt DATETIME2 NOT NULL CONSTRAINT DF_ScrapeProductEquivalences_createdAt DEFAULT SYSUTCDATETIME(),
+    updatedAt DATETIME2 NULL
+);
+
+CREATE UNIQUE INDEX UX_ScrapeProductEquivalences_articulo_sku
+ON dbo.ScrapeProductEquivalences (artc_articulo, scrapeSku);
+
+CREATE INDEX IX_ScrapeProductEquivalences_status_score
+ON dbo.ScrapeProductEquivalences (status, matchScore DESC);
+```
+
+Preview sin guardar:
+
+```powershell
+curl "http://localhost:3005/match-description-equivalences?minScore=70&limit=100&requestTimeoutMs=120000"
+```
+
+Obtener el SQL de preview sin ejecutarlo:
+
+```powershell
+curl "http://localhost:3005/match-description-equivalences/sql?minScore=70&limit=100"
+```
+
+Guardar equivalencias:
+
+```powershell
+curl "http://localhost:3005/match-description-equivalences?minScore=70&limit=500&requestTimeoutMs=120000&save=true"
+```
+
+Obtener el SQL de guardado sin ejecutarlo:
+
+```powershell
+curl "http://localhost:3005/match-description-equivalences/sql?minScore=70&limit=500&save=true"
+```
+
+Parametros:
+
+- `minScore`: score minimo de coincidencia, default `70`.
+- `limit`: maximo de equivalencias a evaluar/guardar, default `500`.
+- `requestTimeoutMs`: timeout SQL para esta operacion, default `120000`.
+- `save=true`: ejecuta `MERGE` sobre `dbo.ScrapeProductEquivalences`.
+- `printSql=true`: devuelve el SQL dentro de JSON sin ejecutarlo.
+
+Las coincidencias quedan con `status = 'pending'` para que puedas revisarlas antes de tomarlas como definitivas. La fuente se lee desde `com_articulos.codigo` y `com_articulos.descripcion`, pero se guarda en `ScrapeProductEquivalences.artc_articulo` y `ScrapeProductEquivalences.artc_descripcion` para respetar la tabla existente. La metrica actual usa coincidencia exacta, contencion de texto y solapamiento de tokens.
 
 Para lanzar una captura y guardar en JSON + SQL Server agrega `saveDb=true`:
 
@@ -258,6 +382,12 @@ Parametros para botones de carga:
 - `loadMoreText`: texto del boton. Por defecto `Ver más productos`.
 - `maxLoadMoreClicks`: maximo de clics.
 - `loadMoreDelayMs`: espera despues de cada clic.
+
+Parametros de paginacion:
+
+- `autoPaginate=true`: captura paginas consecutivas cuando detecta paginacion.
+- `maxPages`: maximo de paginas a recorrer.
+- `paginationDelayMs`: espera antes de navegar a la siguiente pagina.
 
 Cada captura incluye `domain`, `extractor` y `debug.selectedExtractor` para saber que ruta de extraccion se uso.
 
