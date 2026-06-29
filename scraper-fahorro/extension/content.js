@@ -1,11 +1,126 @@
 (function () {
   const CAPTURE_API_URL = "http://localhost:3005/capture";
   const PENDING_SCRAPE_API_URL = "http://localhost:3005/pending-scrape";
+  const JOB_STATUS_API_URL = "http://localhost:3005/scrape-job-status";
   const AUTO_CAPTURE_FLAG = "__domExtractorAutoCaptureStarted";
   const PAGINATION_JOB_KEY = "__domExtractorPaginationJob";
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function normalizeText(value) {
+    return (value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function isVisible(element) {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  function clickElement(element) {
+    if (!element) {
+      throw new Error("No element found to click.");
+    }
+
+    element.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    element.click();
+  }
+
+  function clickElementCenter(element, xRatio = 0.5) {
+    if (!element) {
+      throw new Error("No element found to click.");
+    }
+
+    element.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + (rect.width * xRatio);
+    const y = rect.top + (rect.height / 2);
+    const target = document.elementFromPoint(x, y) || element;
+
+    target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+  }
+
+  function findVisibleElementByText(selector, requiredTexts, rejectedTexts = []) {
+    const matches = findVisibleElementsByText(selector, requiredTexts, rejectedTexts);
+    return matches[0] || null;
+  }
+
+  function findVisibleElementsByText(selector, requiredTexts, rejectedTexts = []) {
+    const required = requiredTexts.map(normalizeText).filter(Boolean);
+    const rejected = rejectedTexts.map(normalizeText).filter(Boolean);
+
+    return Array.from(document.querySelectorAll(selector)).filter((element) => {
+      if (!isVisible(element)) return false;
+
+      const text = normalizeText(element.innerText || element.textContent || element.getAttribute("aria-label"));
+      if (!text) return false;
+
+      return required.every((part) => text.includes(part)) && !rejected.some((part) => text.includes(part));
+    }).sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+    });
+  }
+
+  function findClickableFromElement(element) {
+    if (!element) return null;
+    return element.closest("button, a, label, [role='button']") || element;
+  }
+
+  async function waitUntilTextVisible(requiredTexts, timeoutMs = 10000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const pageText = normalizeText(document.body ? document.body.innerText : "");
+      const required = requiredTexts.map(normalizeText).filter(Boolean);
+
+      if (required.every((part) => pageText.includes(part))) {
+        return true;
+      }
+
+      await sleep(500);
+    }
+
+    return false;
+  }
+
+  async function waitForElementByText(selector, requiredTexts, timeoutMs = 10000, rejectedTexts = []) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const element = findVisibleElementByText(selector, requiredTexts, rejectedTexts);
+      if (element) {
+        return element;
+      }
+
+      await sleep(500);
+    }
+
+    return null;
+  }
+
+  function setNativeInputValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
   }
 
   function getHostname() {
@@ -128,18 +243,11 @@
   }
 
   function findLoadMoreButton(text) {
-    const normalizeLabel = (value) => {
-      return (value || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .trim()
-        .toLowerCase();
-    };
-    const expected = normalizeLabel(text || "Ver mas productos");
+    const expected = normalizeText(text || "Ver mas productos");
     const elements = Array.from(document.querySelectorAll("button, a, [role='button']"));
 
     return elements.find((element) => {
-      const label = normalizeLabel(element.innerText || element.textContent || element.getAttribute("aria-label"));
+      const label = normalizeText(element.innerText || element.textContent || element.getAttribute("aria-label"));
       const disabled = element.disabled || element.getAttribute("aria-disabled") === "true";
       const visible = element.offsetParent !== null;
 
@@ -217,6 +325,266 @@
     }
   }
 
+  async function markScrapeJobStatus(jobId, status, error = "") {
+    if (!jobId) return;
+
+    try {
+      await fetch(JOB_STATUS_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ jobId, status, error })
+      });
+    } catch (statusError) {
+      console.warn("Could not update job status:", statusError.message);
+    }
+  }
+
+  function findBodegaCurrentStoreSelector() {
+    const storeButtons = Array.from(document.querySelectorAll("button"))
+      .filter((element) => {
+        if (!isVisible(element)) return false;
+
+        const rect = element.getBoundingClientRect();
+        const text = normalizeText(element.innerText || element.textContent || element.getAttribute("aria-label"));
+        const hasRightChevron = Boolean(element.querySelector("i.ld-ChevronRight, .ld-ChevronRight"));
+
+        if (!hasRightChevron) return false;
+        if (text.includes("agregar direccion") || text.includes("agrega una direccion")) return false;
+
+        // The current-store selector is a real button inside the left delivery panel.
+        return rect.left < 460 && rect.top > 210 && rect.width > 120 && rect.height > 35;
+      })
+      .sort((left, right) => {
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+      });
+
+    if (storeButtons[0]) {
+      return storeButtons[0];
+    }
+
+    const fallbackCandidates = Array.from(document.querySelectorAll("button, [role='button'], a, label, div"))
+      .filter((element) => {
+        if (!isVisible(element)) return false;
+
+        const rect = element.getBoundingClientRect();
+        const text = normalizeText(element.innerText || element.textContent || element.getAttribute("aria-label"));
+        const hasRightChevron = Boolean(element.querySelector("i.ld-ChevronRight, .ld-ChevronRight"));
+
+        if (text.includes("agregar direccion") || text.includes("agrega una direccion")) return false;
+        if (!hasRightChevron && rect.height < 50) return false;
+
+        return rect.left < 460 && rect.top > 210 && rect.width > 120 && rect.height > 35;
+      })
+      .sort((left, right) => {
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+      });
+
+    return fallbackCandidates[0] || null;
+  }
+
+  function findBodegaStoreResult(storeName) {
+    const required = normalizeText(storeName).split(" ").filter(Boolean);
+    const candidates = Array.from(document.querySelectorAll("button, [role='button'], label, div"))
+      .filter((element) => {
+        if (!isVisible(element)) return false;
+
+        const rect = element.getBoundingClientRect();
+        const text = normalizeText(element.innerText || element.textContent || element.getAttribute("aria-label"));
+
+        if (required.length > 0 && !required.every((part) => text.includes(part))) return false;
+        if (required.length === 0 && !text.includes("bodega aurrera")) return false;
+
+        // Store results are rendered in the right drawer.
+        return rect.left > (window.innerWidth * 0.45) && rect.width > 120 && rect.height > 25;
+      })
+      .sort((left, right) => {
+        const leftRadio = left.querySelector && left.querySelector("input[type='radio']");
+        const rightRadio = right.querySelector && right.querySelector("input[type='radio']");
+        if (leftRadio && !rightRadio) return -1;
+        if (!leftRadio && rightRadio) return 1;
+
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        return (rightRect.width * rightRect.height) - (leftRect.width * leftRect.height);
+      });
+
+    return candidates[0] || null;
+  }
+
+  function findBodegaStoreRadio(storeName) {
+    const required = normalizeText(storeName).split(" ").filter(Boolean);
+    const radios = Array.from(document.querySelectorAll("input[type='radio'][name='pickup-store']"));
+
+    return radios.find((radio) => {
+      if (!isVisible(radio)) return false;
+
+      const container = radio.closest("label, li, div");
+      if (!container) return false;
+
+      const candidates = [container];
+      let parent = container.parentElement;
+      for (let index = 0; index < 4 && parent; index += 1) {
+        candidates.push(parent);
+        parent = parent.parentElement;
+      }
+
+      return candidates.some((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const text = normalizeText(candidate.innerText || candidate.textContent || "");
+
+        return rect.left > (window.innerWidth * 0.45)
+          && required.every((part) => text.includes(part));
+      });
+    });
+  }
+
+  async function clickBodegaChooseButton() {
+    const startedAt = Date.now();
+    let chooseButton = null;
+
+    while (Date.now() - startedAt < 8000) {
+      chooseButton = document.querySelector("button[data-automation-id='save-label']")
+        || findVisibleElementByText("button", ["elegir"]);
+
+      if (chooseButton && isVisible(chooseButton) && !chooseButton.disabled && chooseButton.getAttribute("aria-disabled") !== "true") {
+        break;
+      }
+
+      await sleep(500);
+    }
+
+    if (!chooseButton || !isVisible(chooseButton)) {
+      throw new Error("Bodega choose button was not found.");
+    }
+
+    clickElement(chooseButton);
+    await sleep(2500);
+  }
+
+  async function openBodegaStoreDrawer() {
+    const locationHeader = await waitForElementByText("button, [role='button'], div, span", ["elige como quieres recibir el pedido"], 8000);
+    if (locationHeader) {
+      clickElement(findClickableFromElement(locationHeader));
+      await sleep(1200);
+    }
+
+    if (await waitUntilTextVisible(["elegir tienda"], 1000)) {
+      return;
+    }
+
+    const storeSelector = findBodegaCurrentStoreSelector() || findVisibleElementByText(
+      "button, [role='button'], a, label, div",
+      ["tienda de invitado"],
+      ["agregar direccion", "agrega una direccion"]
+    );
+
+    if (!storeSelector) {
+      throw new Error("Bodega store selector was not found.");
+    }
+
+    if (storeSelector.tagName === "BUTTON") {
+      clickElement(storeSelector);
+    } else {
+      clickElementCenter(findClickableFromElement(storeSelector), 0.88);
+    }
+
+    if (!(await waitUntilTextVisible(["elegir tienda"], 6000))) {
+      clickElementCenter(storeSelector, 0.88);
+      await sleep(1500);
+    }
+  }
+
+  async function fillBodegaZipCode(zipCode) {
+    const drawerTitle = await waitForElementByText("h1, h2, h3, [role='heading'], div, span", ["elegir tienda"], 10000);
+    if (!drawerTitle) {
+      throw new Error("Bodega store drawer did not open.");
+    }
+
+    const inputs = Array.from(document.querySelectorAll("input[type='text'], input[type='search'], input:not([type])"))
+      .filter(isVisible)
+      .sort((left, right) => {
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        return rightRect.left - leftRect.left;
+      });
+
+    const input = inputs[0];
+    if (!input) {
+      throw new Error("Bodega zip code input was not found.");
+    }
+
+    input.focus();
+    setNativeInputValue(input, zipCode);
+    await sleep(2500);
+  }
+
+  async function selectBodegaStore(zipCode, storeName) {
+    const startedAt = Date.now();
+    let preferredStore = null;
+    let preferredRadio = null;
+
+    while (Date.now() - startedAt < 8000) {
+      preferredRadio = findBodegaStoreRadio(storeName);
+      preferredStore = preferredRadio ? null : findBodegaStoreResult(storeName);
+      if (preferredRadio || preferredStore) break;
+      await sleep(500);
+    }
+
+    const fallbackStore = preferredStore || findVisibleElementByText(
+      "button, [role='button'], label, div",
+      ["bodega aurrera"],
+      ["agregar direccion", "agrega una direccion"]
+    );
+
+    if (!fallbackStore) {
+      throw new Error(`No Bodega Aurrera store result was found for zip code ${zipCode}.`);
+    }
+
+    const radio = preferredRadio || (fallbackStore.querySelector && fallbackStore.querySelector("input[type='radio'][name='pickup-store'], input[type='radio']"));
+    if (radio) {
+      clickElement(radio);
+    } else {
+      clickElementCenter(findClickableFromElement(fallbackStore), 0.08);
+    }
+
+    await sleep(1000);
+    await clickBodegaChooseButton();
+  }
+
+  async function runBodegaSetStore(job) {
+    const zipCode = String(job.zipCode || "67350");
+    const storeName = String(job.storeName || "Allende Zuazua");
+
+    console.log("Starting Bodega store setup job:", {
+      jobId: job.id,
+      zipCode,
+      storeName
+    });
+
+    await sleep(job.waitBeforeCaptureMs || 2500);
+    await openBodegaStoreDrawer();
+    await fillBodegaZipCode(zipCode);
+    await selectBodegaStore(zipCode, storeName);
+
+    await markScrapeJobStatus(job.id, "completed");
+
+    console.log("Bodega store setup finished:", {
+      jobId: job.id,
+      zipCode,
+      storeName
+    });
+
+    if (job.closeTab) {
+      await closeCurrentTab();
+    }
+  }
+
   function hasPaginationEvidence() {
     const hasNumberedPageControl = Boolean(Array.from(document.querySelectorAll("a[href], button, [role='button']")).find((element) => {
       const label = (element.innerText || element.textContent || "").trim();
@@ -283,16 +651,23 @@
     }
 
     window[AUTO_CAPTURE_FLAG] = true;
+    let activeJob = null;
 
     try {
       await sleep(1500);
 
       const job = await getCurrentJob();
+      activeJob = job;
       if (!job) {
         return;
       }
 
       console.log("Scrape job found:", job);
+
+      if (job.action === "setStore") {
+        await runBodegaSetStore(job);
+        return;
+      }
 
       await sleep(job.waitBeforeCaptureMs || 4000);
 
@@ -339,6 +714,10 @@
         await closeCurrentTab();
       }
     } catch (error) {
+      if (activeJob && activeJob.action === "setStore") {
+        await markScrapeJobStatus(activeJob.id, "failed", error.message);
+      }
+
       console.warn("Automatic capture did not run:", error.message);
     }
   }

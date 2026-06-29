@@ -108,6 +108,37 @@ Bodega Aurrera activa paginacion automatica por default. Si una categoria tiene 
 curl "http://localhost:3005/scrape?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Farticulos-bebes-y-ninos%2F02&autoPaginate=true&maxPages=5"
 ```
 
+## Setear tienda Bodega Aurrera sin scrapear
+
+Este endpoint abre Chrome y ejecuta un flujo RPA separado para seleccionar tienda en Bodega Aurrera. No guarda JSON, no guarda SQL y no extrae productos.
+
+Por defecto usa el codigo postal `67350` y la tienda `Allende Zuazua`:
+
+```powershell
+curl "http://localhost:3005/bodega/set-store?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Fdetergente-suavizante-y-limpieza-del-hogar%2F13"
+```
+
+Tambien puedes mandarlo explicito. Usa `storeName` para seleccionar una tienda especifica:
+
+```powershell
+curl "http://localhost:3005/bodega/set-store?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Fdetergente-suavizante-y-limpieza-del-hogar%2F13&zipCode=67350&storeName=Allende%20Zuazua"
+```
+
+El flujo hace esto:
+
+1. Abre la URL en Chrome.
+2. Busca la zona `Elige como quieres recibir el pedido`.
+3. Evita el boton `Agregar direccion`.
+4. Abre el selector de tienda actual dentro del panel.
+5. En la ventana lateral `Elegir tienda`, escribe el codigo postal.
+6. Selecciona la tienda indicada por `storeName`.
+
+Por default deja la pestana abierta para revisar visualmente el resultado. Si quieres cerrarla al terminar:
+
+```powershell
+curl "http://localhost:3005/bodega/set-store?url=https%3A%2F%2Fdespensa.bodegaaurrera.com.mx%2Fcontent%2Fdetergente-suavizante-y-limpieza-del-hogar%2F13&zipCode=67350&storeName=Allende%20Zuazua&closeTab=true"
+```
+
 Para Soriana:
 
 ```powershell

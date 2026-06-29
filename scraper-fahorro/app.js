@@ -174,9 +174,12 @@ function createScrapeJob(targetUrl, options = {}) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const job = {
     id,
+    action: options.action || "scrape",
     url: targetUrl,
     normalizedUrl: normalizeUrlForMatch(targetUrl),
     extractor: options.extractor || "",
+    zipCode: options.zipCode || "",
+    storeName: options.storeName || "",
     waitBeforeCaptureMs: options.waitBeforeCaptureMs || 4000,
     autoScroll: Boolean(options.autoScroll),
     autoPaginate: Boolean(options.autoPaginate),
@@ -403,6 +406,73 @@ app.get("/scrape", (req, res) => {
   });
 });
 
+app.get("/bodega/set-store", (req, res) => {
+  const targetUrl = req.query.url;
+  const validation = validateTargetUrl(targetUrl);
+
+  if (validation.error) {
+    return res.status(400).json({ ok: false, error: validation.error });
+  }
+
+  const hostname = validation.parsedUrl.hostname.toLowerCase();
+  if (!hostname.includes("bodegaaurrera.com.mx")) {
+    return res.status(400).json({
+      ok: false,
+      error: "This endpoint is only intended for bodegaaurrera.com.mx URLs."
+    });
+  }
+
+  const zipCode = typeof req.query.zipCode === "string" && req.query.zipCode.trim()
+    ? req.query.zipCode.trim()
+    : "67350";
+  const storeName = typeof req.query.storeName === "string" && req.query.storeName.trim()
+    ? req.query.storeName.trim()
+    : "Allende Zuazua";
+
+  const jobOptions = scrapeOptionsFromQuery(req, targetUrl, {
+    action: "setStore",
+    zipCode,
+    storeName,
+    waitBeforeCaptureMs: 2500,
+    closeTab: false
+  });
+
+  const job = createScrapeJob(targetUrl, {
+    ...jobOptions,
+    action: "setStore",
+    zipCode,
+    storeName
+  });
+
+  openChrome(targetUrl, (error) => {
+    if (error) {
+      pendingScrapes.set(job.id, {
+        ...job,
+        status: "open_failed",
+        error: error.message
+      });
+
+      return res.status(500).json({
+        ok: false,
+        error: "Store setup job was created, but Chrome could not be opened. Verify Chrome is installed and available in PATH.",
+        detail: error.message,
+        jobId: job.id
+      });
+    }
+
+    res.json({
+      ok: true,
+      jobId: job.id,
+      action: job.action,
+      opened: targetUrl,
+      zipCode: job.zipCode,
+      storeName: job.storeName,
+      closeTab: job.closeTab,
+      message: "Chrome opened. The extension will set the Bodega Aurrera store automatically without scraping."
+    });
+  });
+});
+
 app.get("/scrape-active-urls", async (req, res) => {
   try {
     const urls = await getActiveScrapeUrls();
@@ -494,8 +564,11 @@ app.get("/pending-scrape", (req, res) => {
     pending: true,
     job: {
       id: job.id,
+      action: job.action,
       url: job.url,
       extractor: job.extractor,
+      zipCode: job.zipCode,
+      storeName: job.storeName,
       waitBeforeCaptureMs: job.waitBeforeCaptureMs,
       autoScroll: job.autoScroll,
       autoPaginate: job.autoPaginate,
@@ -512,6 +585,29 @@ app.get("/pending-scrape", (req, res) => {
       saveDb: job.saveDb
     }
   });
+});
+
+app.post("/scrape-job-status", (req, res) => {
+  const { jobId, status, error } = req.body || {};
+
+  if (!jobId || !pendingScrapes.has(jobId)) {
+    return res.status(404).json({ ok: false, error: "Job not found." });
+  }
+
+  if (!["completed", "failed"].includes(status)) {
+    return res.status(400).json({ ok: false, error: "Status must be completed or failed." });
+  }
+
+  const job = pendingScrapes.get(jobId);
+  pendingScrapes.set(jobId, {
+    ...job,
+    status,
+    error: error || "",
+    completedAt: status === "completed" ? new Date().toISOString() : job.completedAt,
+    failedAt: status === "failed" ? new Date().toISOString() : job.failedAt
+  });
+
+  res.json({ ok: true });
 });
 
 app.get("/scrape-jobs", (_req, res) => {
