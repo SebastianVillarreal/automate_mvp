@@ -114,6 +114,12 @@ BEGIN
   );
 END;
 
+IF COL_LENGTH('dbo.ScrapeCaptures', 'Tienda') IS NULL
+BEGIN
+  ALTER TABLE dbo.ScrapeCaptures
+    ADD Tienda NVARCHAR(255) NULL;
+END;
+
 IF NOT EXISTS (
   SELECT 1
   FROM sys.foreign_keys
@@ -144,6 +150,7 @@ async function saveCaptureToDb(capture, fileName) {
     inputNullable(captureRequest, "captureMode", sql.NVarChar(50), capture.captureMode);
     inputNullable(captureRequest, "domain", sql.NVarChar(255), capture.domain);
     inputNullable(captureRequest, "extractor", sql.NVarChar(255), capture.extractor);
+    inputNullable(captureRequest, "Tienda", sql.NVarChar(255), capture.Tienda);
     inputNullable(captureRequest, "url", sql.NVarChar(2000), capture.url);
     inputNullable(captureRequest, "title", sql.NVarChar(1000), capture.title);
     inputNullable(captureRequest, "pageTimestamp", sql.DateTime2, capture.timestamp ? new Date(capture.timestamp) : null);
@@ -157,12 +164,12 @@ async function saveCaptureToDb(capture, fileName) {
 
     const captureResult = await captureRequest.query(`
 INSERT INTO dbo.ScrapeCaptures (
-  jobId, captureMode, domain, extractor, url, title, pageTimestamp, receivedAt,
+  jobId, captureMode, domain, extractor, Tienda, url, title, pageTimestamp, receivedAt,
   fileName, productCount, debugJson, text, html, rawJson
 )
 OUTPUT INSERTED.id
 VALUES (
-  @jobId, @captureMode, @domain, @extractor, @url, @title, @pageTimestamp, @receivedAt,
+  @jobId, @captureMode, @domain, @extractor, @Tienda, @url, @title, @pageTimestamp, @receivedAt,
   @fileName, @productCount, @debugJson, @text, @html, @rawJson
 );
 `);

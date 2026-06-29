@@ -158,6 +158,7 @@
       url: window.location.href,
       title: document.title,
       timestamp: new Date().toISOString(),
+      Tienda: extraction.Tienda || "",
       text: document.body ? document.body.innerText : "",
       html: document.documentElement ? document.documentElement.outerHTML : "",
       products: extraction.products || [],

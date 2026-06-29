@@ -130,14 +130,22 @@
     return product;
   }
 
+  function extractStoreName() {
+    const storeElement = document.querySelector("#intent-banner-section > button > div > div:nth-child(2) > div > div > span");
+    return cleanText(storeElement && (storeElement.innerText || storeElement.textContent));
+  }
+
   function extract() {
     const candidates = collectCandidates();
     const products = dedupeProducts(candidates.map(extractProduct).filter(Boolean));
+    const storeName = extractStoreName();
 
     return {
       extractor: "bodegaaurrera",
+      Tienda: storeName,
       products,
       debug: {
+        tienda: storeName,
         totalProductCandidates: candidates.length,
         totalProductsExtracted: products.length
       }
