@@ -79,16 +79,45 @@ function normalizeUrlForMatch(targetUrl) {
   return parsedUrl.href;
 }
 
-function openChrome(targetUrl, callback) {
-  const escapedUrl = targetUrl.replace(/"/g, '\\"');
-  const command = `start "" chrome "${escapedUrl}"`;
-
-  exec(command, { windowsHide: true }, callback);
+function escapeWindowsArg(value) {
+  return String(value || "").replace(/"/g, '\\"');
 }
 
-function openChromeAsync(targetUrl) {
+function isFarmaciasGuadalajaraUrl(targetUrl) {
+  try {
+    const hostname = new URL(targetUrl).hostname.toLowerCase();
+    return hostname === "farmaciasguadalajara.com" || hostname.endsWith(".farmaciasguadalajara.com");
+  } catch (_error) {
+    return false;
+  }
+}
+
+function chromeProfileForUrl(targetUrl, explicitProfile = "") {
+  if (explicitProfile) {
+    return explicitProfile;
+  }
+
+  if (isFarmaciasGuadalajaraUrl(targetUrl)) {
+    return process.env.FARMACIAS_GUADALAJARA_CHROME_PROFILE || process.env.CHROME_PROFILE_DIRECTORY || "Profile 4";
+  }
+
+  return process.env.CHROME_PROFILE_DIRECTORY || "";
+}
+
+function openChrome(targetUrl, options, callback) {
+  const openOptions = typeof options === "function" ? {} : (options || {});
+  const done = typeof options === "function" ? options : callback;
+  const chromeProfile = chromeProfileForUrl(targetUrl, openOptions.chromeProfile);
+  const escapedUrl = targetUrl.replace(/"/g, '\\"');
+  const profileArg = chromeProfile ? ` --profile-directory="${escapeWindowsArg(chromeProfile)}"` : "";
+  const command = `start "" chrome${profileArg} "${escapedUrl}"`;
+
+  exec(command, { windowsHide: true }, done);
+}
+
+function openChromeAsync(targetUrl, options = {}) {
   return new Promise((resolve, reject) => {
-    openChrome(targetUrl, (error) => {
+    openChrome(targetUrl, options, (error) => {
       if (error) {
         reject(error);
         return;
@@ -101,6 +130,65 @@ function openChromeAsync(targetUrl) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isMercoUrl(targetUrl) {
+  try {
+    const hostname = new URL(targetUrl).hostname.toLowerCase();
+    return hostname.includes("adomicilio.merco.mx");
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isSorianaUrl(targetUrl) {
+  try {
+    const hostname = new URL(targetUrl).hostname.toLowerCase();
+    return hostname === "soriana.com" || hostname.endsWith(".soriana.com");
+  } catch (_error) {
+    return false;
+  }
+}
+
+function shouldWaitForActiveUrl(targetUrl) {
+  return isMercoUrl(targetUrl) || isSorianaUrl(targetUrl);
+}
+
+function isTerminalJobStatus(status) {
+  return ["completed", "failed", "open_failed", "timed_out"].includes(status);
+}
+
+async function waitForJobCompletion(jobId, timeoutMs = 180000, pollMs = 1000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const job = pendingScrapes.get(jobId);
+
+    if (!job) {
+      return {
+        id: jobId,
+        status: "missing",
+        error: "Job not found."
+      };
+    }
+
+    if (isTerminalJobStatus(job.status)) {
+      return job;
+    }
+
+    await sleep(pollMs);
+  }
+
+  const job = pendingScrapes.get(jobId);
+  const timedOutJob = {
+    ...(job || { id: jobId }),
+    status: "timed_out",
+    error: `Job did not complete in ${timeoutMs}ms.`,
+    timedOutAt: new Date().toISOString()
+  };
+
+  pendingScrapes.set(jobId, timedOutJob);
+  return timedOutJob;
 }
 
 function queryBool(value, defaultValue = false) {
@@ -119,8 +207,12 @@ function inferScrapeOptionsFromUrl(targetUrl) {
   if (hostname.includes("adomicilio.merco.mx")) {
     return {
       autoScroll: true,
-      waitBeforeCaptureMs: 5000,
-      maxScrolls: 25
+      waitBeforeCaptureMs: 8000,
+      maxScrolls: 120,
+      scrollStepPx: 750,
+      scrollDelayMs: 1400,
+      scrollStagnantLimit: 10,
+      postScrollWaitMs: 6000
     };
   }
 
@@ -165,6 +257,8 @@ function scrapeOptionsFromQuery(req, targetUrl, defaults = {}) {
     maxScrolls: queryNumber(req.query.maxScrolls, base.maxScrolls || 20),
     scrollStepPx: queryNumber(req.query.scrollStepPx, base.scrollStepPx || 900),
     scrollDelayMs: queryNumber(req.query.scrollDelayMs, base.scrollDelayMs || 900),
+    scrollStagnantLimit: queryNumber(req.query.scrollStagnantLimit, base.scrollStagnantLimit || 2),
+    postScrollWaitMs: queryNumber(req.query.postScrollWaitMs, base.postScrollWaitMs || 1000),
     closeTab: queryBool(req.query.closeTab, base.closeTab !== undefined ? Boolean(base.closeTab) : true),
     saveDb: queryBool(req.query.saveDb, Boolean(base.saveDb))
   };
@@ -191,6 +285,8 @@ function createScrapeJob(targetUrl, options = {}) {
     paginationDelayMs: options.paginationDelayMs || 2500,
     scrollStepPx: options.scrollStepPx || 900,
     scrollDelayMs: options.scrollDelayMs || 900,
+    scrollStagnantLimit: options.scrollStagnantLimit || 2,
+    postScrollWaitMs: options.postScrollWaitMs || 1000,
     maxScrolls: options.maxScrolls || 20,
     closeTab: options.closeTab !== undefined ? Boolean(options.closeTab) : true,
     saveDb: Boolean(options.saveDb),
@@ -357,7 +453,9 @@ app.get("/open", (req, res) => {
     return res.status(400).json({ ok: false, error: validation.error });
   }
 
-  openChrome(targetUrl, (error) => {
+  const chromeProfile = chromeProfileForUrl(targetUrl, req.query.chromeProfile);
+
+  openChrome(targetUrl, { chromeProfile }, (error) => {
     if (error) {
       return res.status(500).json({
         ok: false,
@@ -366,7 +464,7 @@ app.get("/open", (req, res) => {
       });
     }
 
-    res.json({ ok: true, opened: targetUrl });
+    res.json({ ok: true, opened: targetUrl, chromeProfile });
   });
 });
 
@@ -379,8 +477,9 @@ app.get("/scrape", (req, res) => {
   }
 
   const job = createScrapeJob(targetUrl, scrapeOptionsFromQuery(req, targetUrl));
+  const chromeProfile = chromeProfileForUrl(targetUrl, req.query.chromeProfile);
 
-  openChrome(targetUrl, (error) => {
+  openChrome(targetUrl, { chromeProfile }, (error) => {
     if (error) {
       pendingScrapes.set(job.id, {
         ...job,
@@ -400,6 +499,7 @@ app.get("/scrape", (req, res) => {
       ok: true,
       jobId: job.id,
       opened: targetUrl,
+      chromeProfile,
       saveDb: job.saveDb,
       message: "Chrome opened. The extension will capture the page automatically when the URL finishes loading."
     });
@@ -443,8 +543,9 @@ app.get("/bodega/set-store", (req, res) => {
     zipCode,
     storeName
   });
+  const chromeProfile = chromeProfileForUrl(targetUrl, req.query.chromeProfile);
 
-  openChrome(targetUrl, (error) => {
+  openChrome(targetUrl, { chromeProfile }, (error) => {
     if (error) {
       pendingScrapes.set(job.id, {
         ...job,
@@ -465,6 +566,7 @@ app.get("/bodega/set-store", (req, res) => {
       jobId: job.id,
       action: job.action,
       opened: targetUrl,
+      chromeProfile,
       zipCode: job.zipCode,
       storeName: job.storeName,
       closeTab: job.closeTab,
@@ -494,18 +596,38 @@ app.get("/scrape-active-urls", async (req, res) => {
       }
 
       const job = createScrapeJob(targetUrl, scrapeOptionsFromQuery(req, targetUrl, { saveDb: true }));
+      const shouldWaitForCompletion = queryBool(req.query.waitForCompletion, shouldWaitForActiveUrl(targetUrl));
+      const jobTimeoutMs = queryNumber(req.query.jobTimeoutMs, shouldWaitForActiveUrl(targetUrl) ? 180000 : 120000);
+      const chromeProfile = chromeProfileForUrl(targetUrl, req.query.chromeProfile);
 
       try {
-        await openChromeAsync(targetUrl);
-        jobs.push({
+        await openChromeAsync(targetUrl, { chromeProfile });
+        const jobSummary = {
           ok: true,
           jobId: job.id,
           url: targetUrl,
+          chromeProfile,
           saveDb: job.saveDb,
           autoScroll: job.autoScroll,
           autoPaginate: job.autoPaginate,
-          clickLoadMore: job.clickLoadMore
-        });
+          clickLoadMore: job.clickLoadMore,
+          waitForCompletion: shouldWaitForCompletion
+        };
+
+        if (shouldWaitForCompletion) {
+          const completedJob = await waitForJobCompletion(job.id, jobTimeoutMs);
+          jobSummary.status = completedJob.status;
+          jobSummary.products = completedJob.products || 0;
+          jobSummary.file = completedJob.file || "";
+          jobSummary.db = completedJob.db || null;
+          jobSummary.ok = completedJob.status === "completed";
+
+          if (!jobSummary.ok) {
+            jobSummary.error = completedJob.error || `Job finished with status ${completedJob.status}.`;
+          }
+        }
+
+        jobs.push(jobSummary);
       } catch (error) {
         pendingScrapes.set(job.id, {
           ...job,
@@ -581,6 +703,8 @@ app.get("/pending-scrape", (req, res) => {
       maxScrolls: job.maxScrolls,
       scrollStepPx: job.scrollStepPx,
       scrollDelayMs: job.scrollDelayMs,
+      scrollStagnantLimit: job.scrollStagnantLimit,
+      postScrollWaitMs: job.postScrollWaitMs,
       closeTab: job.closeTab,
       saveDb: job.saveDb
     }

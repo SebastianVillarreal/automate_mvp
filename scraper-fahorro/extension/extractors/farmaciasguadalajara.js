@@ -105,18 +105,26 @@
     return { price, oldPrice };
   }
 
-  function extractProduct(container) {
-    const name = firstText(container, [
+  function getProductName(container) {
+    return firstText(container, [
+      ".pdp-link.product-description a.link",
+      ".pdp-link.product-description a",
+      ".product-description a.link",
+      ".product-description a",
+      ".pdp-link a.link",
+      ".pdp-link a",
       "[class*='productName' i]",
       "[class*='product-name' i]",
       "[class*='productTitle' i]",
       "[class*='product-title' i]",
       "[itemprop='name']",
-      "a[title]",
       "h2",
-      "h3",
-      "a[href]"
+      "h3"
     ]);
+  }
+
+  function extractProduct(container) {
+    const name = getProductName(container);
 
     const prices = extractPrices(container);
 
@@ -143,8 +151,10 @@
 
     return {
       extractor: "farmaciasguadalajara",
+      Tienda: "Farmacias Guadalajara",
       products,
       debug: {
+        tienda: "Farmacias Guadalajara",
         totalProductCandidates: candidates.length,
         totalProductsExtracted: products.length
       }

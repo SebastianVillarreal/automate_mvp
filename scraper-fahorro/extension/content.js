@@ -216,6 +216,8 @@
     const maxScrolls = Number(options.maxScrolls || 20);
     const scrollStepPx = Number(options.scrollStepPx || 900);
     const scrollDelayMs = Number(options.scrollDelayMs || 900);
+    const scrollStagnantLimit = Number(options.scrollStagnantLimit || 2);
+    const postScrollWaitMs = Number(options.postScrollWaitMs || 1000);
     let lastScrollHeight = document.documentElement.scrollHeight;
     let stagnantScrolls = 0;
 
@@ -234,11 +236,12 @@
 
       lastScrollHeight = currentScrollHeight;
 
-      if (stagnantScrolls >= 2) {
+      if (stagnantScrolls >= scrollStagnantLimit) {
         break;
       }
     }
 
+    await sleep(postScrollWaitMs);
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     await sleep(1000);
   }
@@ -419,30 +422,49 @@
   }
 
   function findBodegaStoreRadio(storeName) {
-    const required = normalizeText(storeName).split(" ").filter(Boolean);
-    const radios = Array.from(document.querySelectorAll("input[type='radio'][name='pickup-store']"));
+    const expectedName = normalizeText(storeName);
+    const labels = Array.from(document.querySelectorAll("label[data-automation-id='pickup-store']"))
+      .filter(isVisible)
+      .map((label) => {
+        const nameElement = label.querySelector("span.b.f5.lh-copy.dark-gray");
+        const labelText = normalizeText(label.innerText || label.textContent || "");
+        const storeText = normalizeText(nameElement && (nameElement.innerText || nameElement.textContent));
+        const radio = label.querySelector("input[type='radio'][name='pickup-store']");
 
-    return radios.find((radio) => {
-      if (!isVisible(radio)) return false;
+        return {
+          label,
+          radio,
+          storeText,
+          labelText,
+          exact: storeText === expectedName,
+          contains: Boolean(expectedName) && storeText.includes(expectedName)
+        };
+      })
+      .filter((candidate) => candidate.radio && candidate.storeText);
 
-      const container = radio.closest("label, li, div");
-      if (!container) return false;
+    const exactMatch = labels.find((candidate) => candidate.exact);
+    if (exactMatch) {
+      return exactMatch.radio;
+    }
 
-      const candidates = [container];
-      let parent = container.parentElement;
-      for (let index = 0; index < 4 && parent; index += 1) {
-        candidates.push(parent);
-        parent = parent.parentElement;
-      }
+    const containsMatches = labels
+      .filter((candidate) => candidate.contains)
+      .sort((left, right) => left.storeText.length - right.storeText.length);
 
-      return candidates.some((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        const text = normalizeText(candidate.innerText || candidate.textContent || "");
+    if (containsMatches[0]) {
+      return containsMatches[0].radio;
+    }
 
-        return rect.left > (window.innerWidth * 0.45)
-          && required.every((part) => text.includes(part));
-      });
+    const tokenMatches = labels.filter((candidate) => {
+      const tokens = expectedName.split(" ").filter(Boolean);
+      return tokens.length > 0 && tokens.every((token) => candidate.storeText.includes(token));
     });
+
+    if (tokenMatches[0]) {
+      return tokenMatches[0].radio;
+    }
+
+    return null;
   }
 
   async function clickBodegaChooseButton() {
@@ -676,7 +698,9 @@
         await autoScrollPage({
           maxScrolls: job.maxScrolls,
           scrollStepPx: job.scrollStepPx,
-          scrollDelayMs: job.scrollDelayMs
+          scrollDelayMs: job.scrollDelayMs,
+          scrollStagnantLimit: job.scrollStagnantLimit,
+          postScrollWaitMs: job.postScrollWaitMs
         });
       }
 

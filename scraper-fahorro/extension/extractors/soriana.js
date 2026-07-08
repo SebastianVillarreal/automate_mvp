@@ -167,8 +167,10 @@
 
     return {
       extractor: "soriana",
+      Tienda: "Soriana Linares",
       products,
       debug: {
+        tienda: "Soriana Linares",
         totalProductCandidates: candidates.length,
         totalProductsExtracted: products.length
       }

@@ -225,8 +225,10 @@
 
     return {
       extractor: "merco",
+      Tienda: "merco",
       products,
       debug: {
+        tienda: "merco",
         totalProductCandidates: candidates.length,
         totalProductsExtracted: products.length
       }

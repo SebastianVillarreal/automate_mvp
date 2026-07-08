@@ -137,6 +137,15 @@ function inputNullable(request, name, type, value) {
   request.input(name, type, value === undefined ? null : value);
 }
 
+function toSqlLocalDate(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+
+  // mssql/tedious serializes JS Date components as UTC for DateTime2.
+  // Shift the instant so SQL stores the local wall-clock time.
+  return new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
+}
+
 async function saveCaptureToDb(capture, fileName) {
   const pool = await getPool();
   await ensureSchema(pool);
@@ -153,8 +162,8 @@ async function saveCaptureToDb(capture, fileName) {
     inputNullable(captureRequest, "Tienda", sql.NVarChar(255), capture.Tienda);
     inputNullable(captureRequest, "url", sql.NVarChar(2000), capture.url);
     inputNullable(captureRequest, "title", sql.NVarChar(1000), capture.title);
-    inputNullable(captureRequest, "pageTimestamp", sql.DateTime2, capture.timestamp ? new Date(capture.timestamp) : null);
-    inputNullable(captureRequest, "receivedAt", sql.DateTime2, capture.receivedAt ? new Date(capture.receivedAt) : new Date());
+    inputNullable(captureRequest, "pageTimestamp", sql.DateTime2, capture.timestamp ? toSqlLocalDate(capture.timestamp) : null);
+    inputNullable(captureRequest, "receivedAt", sql.DateTime2, toSqlLocalDate(capture.receivedAt));
     inputNullable(captureRequest, "fileName", sql.NVarChar(255), fileName);
     inputNullable(captureRequest, "productCount", sql.Int, capture.products.length);
     inputNullable(captureRequest, "debugJson", sql.NVarChar(sql.MAX), JSON.stringify(capture.debug || null));
